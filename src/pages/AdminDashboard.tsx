@@ -11,6 +11,7 @@ import EmailPrompts from '../components/EmailPrompts';
 import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
 import DatePickerInput from '../components/DatePickerInput';
+import vellumLogoWhite from '../Logo_Horizontal_White_wTagline_Artboard 1.svg';
 
 interface EditingItem extends PromoItem {
   isNew?: boolean;
@@ -35,6 +36,7 @@ function AdminDashboard() {
   const [processingOrders, setProcessingOrders] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [selectedOrderIds, setSelectedOrderIds] = useState<Set<string>>(new Set());
 
   const [isEditDatesModalOpen, setIsEditDatesModalOpen] = useState(false);
   const [editingOrderDates, setEditingOrderDates] = useState<EditingOrderDates | null>(null);
@@ -360,6 +362,55 @@ function AdminDashboard() {
     }
   };
 
+  const handleSelectOrder = (orderId: string, isSelected: boolean) => {
+    setSelectedOrderIds(prev => {
+      const next = new Set(prev);
+      if (isSelected) {
+        next.add(orderId);
+      } else {
+        next.delete(orderId);
+      }
+      return next;
+    });
+  };
+
+  const handleSelectAllOrders = (isSelected: boolean) => {
+    if (isSelected) {
+      setSelectedOrderIds(new Set(orders.map(o => o.id)));
+    } else {
+      setSelectedOrderIds(new Set());
+    }
+  };
+
+  const handleDeleteSelectedOrders = async () => {
+    if (selectedOrderIds.size === 0) return;
+
+    if (!window.confirm(`Are you sure you want to delete ${selectedOrderIds.size} selected order(s)? This action cannot be undone.`)) {
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    try {
+      const { error: deleteError } = await supabase
+        .from('orders')
+        .delete()
+        .in('id', Array.from(selectedOrderIds));
+
+      if (deleteError) throw deleteError;
+
+      setSelectedOrderIds(new Set());
+      await fetchOrders();
+      console.log(`${selectedOrderIds.size} orders deleted successfully.`);
+
+    } catch (err: any) {
+      console.error('Error deleting orders:', err);
+      setError(err.message || 'Failed to delete selected orders.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   if (!user?.is_admin) {
     return null;
   }
@@ -374,10 +425,11 @@ function AdminDashboard() {
 
   return (
     <div className="min-h-screen bg-[#f8f9fc]">
-      <div className="fixed left-0 top-0 h-full w-64 bg-[#2c3e50] text-white p-6">
-        <div className="flex items-center space-x-3 mb-10">
-          <Package2 className="h-8 w-8" />
-          <h1 className="text-xl font-semibold">Inventory Pro</h1>
+      <div className="fixed left-0 top-0 h-full w-64 bg-gradient-to-b from-[rgb(0,54,86)] to-[rgb(0,117,174)] text-white p-6">
+        <div className="mb-10">
+          <Link to="/">
+            <img src={vellumLogoWhite} alt="Vellum Logo" className="h-10 w-auto" />
+          </Link>
         </div>
         
         <nav className="space-y-2">
@@ -385,8 +437,8 @@ function AdminDashboard() {
             onClick={() => setActiveTab('orders')}
             className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${
               activeTab === 'orders'
-                ? 'bg-[#34495e] text-white'
-                : 'text-gray-300 hover:bg-[#34495e] hover:text-white'
+                ? 'bg-[#2192D0] text-white'
+                : 'text-gray-300 hover:bg-[#2192D0]/80 hover:text-white'
             }`}
           >
             <ShoppingBag className="h-5 w-5" />
@@ -397,8 +449,8 @@ function AdminDashboard() {
             onClick={() => setActiveTab('inventory')}
             className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${
               activeTab === 'inventory'
-                ? 'bg-[#34495e] text-white'
-                : 'text-gray-300 hover:bg-[#34495e] hover:text-white'
+                ? 'bg-[#2192D0] text-white'
+                : 'text-gray-300 hover:bg-[#2192D0]/80 hover:text-white'
             }`}
           >
             <LayoutDashboard className="h-5 w-5" />
@@ -409,8 +461,8 @@ function AdminDashboard() {
             onClick={() => setActiveTab('email-prompts')}
             className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${
               activeTab === 'email-prompts'
-                ? 'bg-[#34495e] text-white'
-                : 'text-gray-300 hover:bg-[#34495e] hover:text-white'
+                ? 'bg-[#2192D0] text-white'
+                : 'text-gray-300 hover:bg-[#2192D0]/80 hover:text-white'
             }`}
           >
             <Mail className="h-5 w-5" />
@@ -419,7 +471,7 @@ function AdminDashboard() {
 
           <Link
             to="/"
-            className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors text-gray-300 hover:bg-[#34495e] hover:text-white mt-4"
+            className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors text-gray-300 hover:bg-[#2192D0]/60 hover:text-white mt-4"
           >
             <Package2 className="h-5 w-5" />
             <span>View Store</span>
@@ -430,7 +482,7 @@ function AdminDashboard() {
       <div className="ml-64 p-8">
         <div className="flex justify-between items-center mb-8">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">
+            <h1 className="text-2xl font-bold text-[#58595B]">
               {activeTab === 'orders' ? 'Orders' : 
                activeTab === 'inventory' ? 'Inventory' : 
                'Email Prompts'}
@@ -476,65 +528,94 @@ function AdminDashboard() {
             ) : orders.length === 0 ? (
               <div className="text-center py-8 text-gray-500">No orders found.</div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Items</th>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Dates</th>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
-                    {orders.map((order) => (
-                      <tr key={order.id}>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="text-sm font-medium text-gray-900">{order.user_name}</div>
-                          <div className="text-sm text-gray-500">{order.user_email}</div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <ul className="list-disc list-inside text-sm text-gray-700">
-                            {order.items.map((checkout) => (
-                              <li key={checkout.id}>
-                                {checkout.item ? `${checkout.item.name} (Qty: ${checkout.quantity})` : 'Item not found'}
-                              </li>
-                            ))}
-                          </ul>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="text-sm text-gray-900">
-                            Pickup: {order.checkout_date ? format(parseISO(order.checkout_date), 'MM/dd/yyyy') : 'N/A'}
-                          </div>
-                          <div className="text-sm text-gray-500">
-                            Return: {order.return_date ? format(parseISO(order.return_date), 'MM/dd/yyyy') : 'N/A'}
-                          </div>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <StatusDropdown
-                            status={order.status}
-                            orderId={order.id}
-                            onStatusChange={updateOrderStatus}
-                            disabled={processingOrders.has(order.id)}
-                            availableStatuses={getAvailableStatuses(order.status)}
+              <>
+                <div className="mb-4">
+                  <button
+                    onClick={handleDeleteSelectedOrders}
+                    disabled={selectedOrderIds.size === 0}
+                    className="px-4 py-2 border border-gray-400 text-gray-600 rounded-lg hover:bg-gray-100 disabled:border-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed disabled:opacity-75 flex items-center gap-2"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    Delete Selected ({selectedOrderIds.size})
+                  </button>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          <input 
+                            type="checkbox" 
+                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            checked={selectedOrderIds.size === orders.length && orders.length > 0}
+                            onChange={(e) => handleSelectAllOrders(e.target.checked)}
                           />
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                          <button
-                            onClick={() => handleOpenEditDatesModal(order)}
-                            disabled={order.status === 'returned' || order.status === 'cancelled'}
-                            className={`p-1 rounded hover:bg-gray-100 ${order.status === 'returned' || order.status === 'cancelled' ? 'text-gray-300 cursor-not-allowed' : 'text-blue-600 hover:text-blue-800'}`}
-                            title="Edit Dates"
-                          >
-                            <Edit className="h-4 w-4" />
-                          </button>
-                        </td>
+                        </th>
+                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>
+                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Items</th>
+                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Dates</th>
+                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {orders.map((order) => (
+                        <tr key={order.id}>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <input 
+                              type="checkbox" 
+                              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                              checked={selectedOrderIds.has(order.id)}
+                              onChange={(e) => handleSelectOrder(order.id, e.target.checked)}
+                            />
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="text-sm font-medium text-[#58595B]">{order.user_name}</div>
+                            <div className="text-sm text-gray-500">{order.user_email}</div>
+                          </td>
+                          <td className="px-6 py-4">
+                            <ul className="list-disc list-inside text-sm text-[#58595B] opacity-80">
+                              {order.items.map((checkout) => (
+                                <li key={checkout.id}>
+                                  {checkout.item ? `${checkout.item.name} (Qty: ${checkout.quantity})` : 'Item not found'}
+                                </li>
+                              ))}
+                            </ul>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="text-sm text-[#58595B]">
+                              Pickup: {order.checkout_date ? format(parseISO(order.checkout_date), 'MM/dd/yyyy') : 'N/A'}
+                            </div>
+                            <div className="text-sm text-gray-500">
+                              Return: {order.return_date ? format(parseISO(order.return_date), 'MM/dd/yyyy') : 'N/A'}
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <StatusDropdown
+                              status={order.status}
+                              orderId={order.id}
+                              onStatusChange={updateOrderStatus}
+                              disabled={processingOrders.has(order.id)}
+                              availableStatuses={getAvailableStatuses(order.status)}
+                            />
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                            <button
+                              onClick={() => handleOpenEditDatesModal(order)}
+                              disabled={order.status === 'returned' || order.status === 'cancelled'}
+                              className={`p-1 rounded hover:bg-gray-100 ${order.status === 'returned' || order.status === 'cancelled' ? 'text-gray-300 cursor-not-allowed' : 'text-blue-600 hover:text-blue-800'}`}
+                              title="Edit Dates"
+                            >
+                              <Edit className="h-4 w-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </div>
         ) : activeTab === 'inventory' ? (
@@ -557,11 +638,11 @@ function AdminDashboard() {
                       )}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <h3 className="text-lg font-medium text-gray-900">{item.name}</h3>
+                      <h3 className="text-lg font-medium text-[#58595B]">{item.name}</h3>
                       <p className="text-sm text-gray-500">{item.description}</p>
                     </div>
                     <div className="text-right">
-                      <p className="text-sm font-medium text-gray-900">
+                      <p className="text-sm font-medium text-[#58595B]">
                         Available: {item.available_quantity} / {item.total_quantity}
                       </p>
                     </div>
@@ -596,7 +677,7 @@ function AdminDashboard() {
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg">
               <div className="flex justify-between items-center mb-6">
-                <h2 className="text-xl font-semibold text-gray-900">
+                <h2 className="text-xl font-semibold text-[#58595B]">
                   {editingItem.isNew ? 'Add New Item' : 'Edit Item'}
                 </h2>
                 <button
@@ -610,7 +691,7 @@ function AdminDashboard() {
 
               <div className="space-y-6">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Name</label>
+                  <label className="block text-sm font-medium text-[#58595B]">Name</label>
                   <input
                     type="text"
                     value={editingItem.name}
@@ -620,7 +701,7 @@ function AdminDashboard() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Description</label>
+                  <label className="block text-sm font-medium text-[#58595B]">Description</label>
                   <textarea
                     value={editingItem.description || ''}
                     onChange={(e) => setEditingItem({ ...editingItem, description: e.target.value })}
@@ -630,7 +711,7 @@ function AdminDashboard() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Image</label>
+                  <label className="block text-sm font-medium text-[#58595B] mb-2">Image</label>
                   <div className="flex items-center space-x-4">
                     <div className="flex-shrink-0 h-24 w-24 rounded-lg overflow-hidden bg-gray-100">
                       {editingItem.image_url ? (
@@ -658,7 +739,7 @@ function AdminDashboard() {
                             }
                           }}
                         />
-                        <div className="flex items-center justify-center px-4 py-2 border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
+                        <div className="flex items-center justify-center px-4 py-2 border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-[#58595B] bg-white hover:bg-gray-50">
                           <Upload className="h-5 w-5 mr-2" />
                           {uploadingImage ? 'Uploading...' : 'Upload Image'}
                         </div>
@@ -672,7 +753,7 @@ function AdminDashboard() {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700">Total Quantity</label>
+                    <label className="block text-sm font-medium text-[#58595B]">Total Quantity</label>
                     <input
                       type="number"
                       min="0"
@@ -690,7 +771,7 @@ function AdminDashboard() {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-gray-700">Available Quantity</label>
+                    <label className="block text-sm font-medium text-[#58595B]">Available Quantity</label>
                     <input
                       type="number"
                       min="0"
@@ -727,12 +808,12 @@ function AdminDashboard() {
         {isEditDatesModalOpen && editingOrderDates && (
           <div className="fixed inset-0 z-50 overflow-y-auto bg-gray-600 bg-opacity-75 flex items-center justify-center">
             <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md">
-              <h3 className="text-lg font-medium leading-6 text-gray-900 mb-4">Edit Order Dates</h3>
+              <h3 className="text-lg font-medium leading-6 text-[#58595B] mb-4">Edit Order Dates</h3>
               <p className="text-sm text-gray-600 mb-2">Order ID: {editingOrderDates.orderId}</p>
               
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Pickup Date</label>
+                  <label className="block text-sm font-medium text-[#58595B] mb-1">Pickup Date</label>
                   <input
                     type="date"
                     value={newPickupDate}
@@ -747,7 +828,7 @@ function AdminDashboard() {
                   )}
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Return Date</label>
+                  <label className="block text-sm font-medium text-[#58595B] mb-1">Return Date</label>
                   <input
                     type="date"
                     value={newReturnDate}

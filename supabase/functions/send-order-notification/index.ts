@@ -34,7 +34,7 @@ serve(async (req) => {
 
   try {
     const { data, error } = await resend.emails.send({
-      from: 'onboarding@resend.dev', // IMPORTANT: Replace with your verified Resend domain/email
+      from: 'Vellum Orders <orders@updates.govellum.com>',
       to: [MARKETING_EMAIL],
       subject: `New Order Placed: ${orderData.orderId}`,
       html: `

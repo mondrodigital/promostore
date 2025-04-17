@@ -9,8 +9,8 @@ const corsHeaders = {
 }
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')
-// Temporarily changing to the user's Resend account email for testing
-const MARKETING_EMAIL = 'mmondro@vellummortgage.com'
+// Revert recipient back to original marketing email
+const MARKETING_EMAIL = 'marketing@vellummortgage.com'
 
 serve(async (req) => {
   // Handle CORS preflight requests
@@ -46,7 +46,8 @@ serve(async (req) => {
 
   try {
     const { data, error } = await resend.emails.send({
-      from: 'onboarding@resend.dev', // IMPORTANT: Replace for production
+      // Revert from address back to Resend testing default
+      from: 'onboarding@resend.dev', 
       to: [MARKETING_EMAIL],
       subject: `New Order Placed: ${orderData.orderId}`,
       html: `

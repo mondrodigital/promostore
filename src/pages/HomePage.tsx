@@ -141,8 +141,34 @@ export default function HomePage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Navbar />
+
+      {/* Hero Section - Updated Background to Gradient */}
+      <div className="bg-gradient-to-r from-[rgb(0,54,86)] to-[rgb(0,117,174)] text-white"> 
+        {/* Remove the inner div for the image overlay */}
+        {/* <div 
+          className="absolute inset-0 bg-cover bg-center opacity-50" 
+          style={{ backgroundImage: `url('/src/blue gradient 3.png')` }} 
+        ></div> */}
+        {/* Content container - remove relative/z-index */}
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 md:py-16">
+          <h1 className="text-3xl md:text-4xl font-bold mb-3">Vellum Mortgage Event Items Store</h1>
+          <p className="text-lg md:text-xl opacity-90 mb-6">
+            Welcome! Use this tool to check out promotional items for your events. All items are free to use.
+          </p>
+          {/* Instructions box - revert opacity/blur for better contrast */}
+          <div className="bg-white bg-opacity-10 p-4 rounded-lg text-sm">
+            <h3 className="font-semibold mb-2">How to Use:</h3>
+            <ol className="list-decimal list-inside space-y-1">
+              <li>Browse available items below. Check availability and details.</li>
+              <li>Enter the desired quantity and click "Add to Cart" for each item needed.</li>
+              <li>Once all items are added, fill out your name, email, and desired pickup/return dates in the form at the bottom of the page.</li>
+              <li>Click "Place Order". You'll receive an email confirmation shortly.</li>
+            </ol>
+          </div>
+        </div>
+      </div>
       
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 pb-36">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {items.map((item) => {
             const cartQuantity = getItemQuantity(item.id);
@@ -169,13 +195,13 @@ export default function HomePage() {
 
                 <div className="p-6">
                   <div className="flex justify-between items-start mb-2">
-                    <h3 className="text-xl font-semibold text-gray-900">{item.name}</h3>
+                    <h3 className="text-xl font-semibold text-[#58595B]">{item.name}</h3>
                     <ItemCalendar itemId={item.id} itemName={item.name} />
                   </div>
-                  <p className="text-gray-600 mb-4">{item.description}</p>
+                  <p className="text-[#58595B] opacity-80 mb-4">{item.description}</p>
                   
                   <div className="flex items-center justify-between mb-4">
-                    <div className="text-sm text-gray-600">
+                    <div className="text-sm text-[#58595B] opacity-80">
                       <p>Available: {item.available_quantity}</p>
                       <p>Total: {item.total_quantity}</p>
                     </div>
@@ -191,7 +217,7 @@ export default function HomePage() {
                       id={`quantity-${item.id}`}
                     />
                     <button
-                      className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="flex-1 bg-[#0075AE] text-white px-4 py-2 rounded-lg hover:bg-[#005f8c] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       disabled={item.available_quantity === 0}
                       onClick={() => {
                         const input = document.getElementById(`quantity-${item.id}`) as HTMLInputElement;
@@ -212,7 +238,8 @@ export default function HomePage() {
         </div>
       </main>
 
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200">
+      {/* Use custom upward shadow, white bg, thick border */}
+      <div className="fixed bottom-0 inset-x-0 bg-white border-t-2 border-gray-300 shadow-[0_-10px_15px_-3px_rgba(0,0,0,0.1),_0_-4px_6px_-4px_rgba(0,0,0,0.1)]">
         <div className="max-w-7xl mx-auto px-4 py-4">
           <form onSubmit={handleSubmit} className="flex items-end gap-6">
             <button
@@ -231,7 +258,7 @@ export default function HomePage() {
 
             <div className="flex-1 grid grid-cols-4 gap-6">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Name</label>
+                <label className="block text-sm font-medium text-[#58595B] mb-1.5">Name</label>
                 <input
                   type="text"
                   required
@@ -242,7 +269,7 @@ export default function HomePage() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Email</label>
+                <label className="block text-sm font-medium text-[#58595B] mb-1.5">Email</label>
                 <input
                   type="email"
                   required
@@ -253,7 +280,7 @@ export default function HomePage() {
                 />
               </div>
               <div className="relative">
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Pickup Date</label>
+                <label className="block text-sm font-medium text-[#58595B] mb-1.5">Pickup Date</label>
                 <DatePicker
                   selected={formData.pickupDate}
                   onChange={(date) => setFormData({ ...formData, pickupDate: date })}
@@ -281,7 +308,7 @@ export default function HomePage() {
                 />
               </div>
               <div className="relative">
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">Return Date</label>
+                <label className="block text-sm font-medium text-[#58595B] mb-1.5">Return Date</label>
                 <DatePicker
                   selected={formData.returnDate}
                   onChange={(date) => setFormData({ ...formData, returnDate: date })}
@@ -313,7 +340,7 @@ export default function HomePage() {
             <button
               type="submit"
               disabled={isSubmitting || cartItems.length === 0}
-              className="px-6 py-2.5 bg-blue-600 text-white font-medium rounded-lg shadow-sm hover:bg-blue-700 focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+              className="px-6 py-2.5 bg-[#0075AE] text-white font-medium rounded-lg shadow-sm hover:bg-[#005f8c] focus:ring-2 focus:ring-offset-2 focus:ring-[#0075AE] disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
             >
               {isSubmitting ? 'Placing Order...' : 'Place Order'}
             </button>
@@ -353,7 +380,7 @@ export default function HomePage() {
                           )}
                         </div>
                         <div>
-                          <h4 className="font-medium">{item.name}</h4>
+                          <h4 className="font-medium text-[#58595B]">{item.name}</h4>
                           <p className="text-sm text-gray-500">Qty: {item.requestedQuantity}</p>
                         </div>
                       </div>

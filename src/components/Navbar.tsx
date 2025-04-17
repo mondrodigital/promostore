@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Package2, LogOut, LogIn } from 'lucide-react';
+import { LogOut, LogIn } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Session } from '@supabase/supabase-js';
+import vellumLogo from '../VellumLogo_Horizontal_Artboard 1.svg';
 
 export default function Navbar() {
   const location = useLocation();
@@ -48,8 +49,8 @@ export default function Navbar() {
       <div className="container mx-auto px-4">
         <div className="flex justify-between items-center h-16">
           <Link to="/" className="flex items-center space-x-2">
-            <Package2 className="h-6 w-6 text-blue-600" />
-            <span className="font-semibold text-xl">Promo Inventory</span>
+            <img src={vellumLogo} alt="Vellum Logo" className="h-8 w-auto" />
+            <span className="font-semibold text-xl text-[#58595B]">Event Items Store</span>
           </Link>
           
           <div className="flex items-center space-x-4">
