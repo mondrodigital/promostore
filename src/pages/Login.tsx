@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
+import { supabase } from '../lib/supabase';
 import { LogIn } from 'lucide-react';
 
 function Login() {
@@ -9,14 +9,26 @@ function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
-  const { signIn, user } = useAuth();
 
   useEffect(() => {
-    // If user is already logged in and is admin, redirect to admin dashboard
-    if (user?.is_admin) {
-      navigate('/admin');
-    }
-  }, [user, navigate]);
+    const checkSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user?.user_metadata?.is_admin) {
+        navigate('/admin');
+      }
+    };
+    checkSession();
+    
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_IN' && session?.user?.user_metadata?.is_admin) {
+        navigate('/admin');
+      }
+    });
+
+    return () => {
+      authListener?.subscription?.unsubscribe();
+    };
+  }, [navigate]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -30,19 +42,21 @@ function Login() {
       setError('');
       setLoading(true);
 
-      const { data, error: signInError } = await signIn(email, password);
+      const { data, error: signInError } = await supabase.auth.signInWithPassword({
+        email: email,
+        password: password,
+      });
       
       if (signInError) {
-        setError('Invalid email or password. Please try again.');
+        setError(signInError.message || 'Invalid email or password. Please try again.');
         return;
       }
 
-      if (!data?.user) {
-        setError('No user returned after sign in');
+      if (!data?.user?.user_metadata?.is_admin) {
+        await supabase.auth.signOut();
+        setError('Access denied. You must be an administrator.');
         return;
       }
-
-      // Navigation will happen automatically through the useEffect above
       
     } catch (error: any) {
       console.error('Login error:', error);
@@ -77,7 +91,7 @@ function Login() {
           <div className="rounded-md shadow-sm space-y-4">
             <div>
               <label htmlFor="email" className="block text-sm font-medium text-gray-700">
-                Email address
+                Admin Email address
               </label>
               <input
                 id="email"
@@ -90,7 +104,6 @@ function Login() {
                 className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
               />
             </div>
-            
             <div>
               <label htmlFor="password" className="block text-sm font-medium text-gray-700">
                 Password

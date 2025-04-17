@@ -1,16 +1,26 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { Package2, Plus, Pencil, Trash2, X, ShoppingBag, Calendar, User, LayoutDashboard, Upload, Mail } from 'lucide-react';
-import { format, parseISO } from 'date-fns';
+import { Package2, Plus, Pencil, Trash2, X, ShoppingBag, Calendar, User, LayoutDashboard, Upload, Mail, Edit } from 'lucide-react';
+import { format, parseISO, isValid, parse } from 'date-fns';
 import { Link } from 'react-router-dom';
 import type { Order, PromoItem } from '../types';
 import StatusDropdown from '../components/StatusDropdown';
 import { useAuth } from '../context/AuthContext';
 import EmailPrompts from '../components/EmailPrompts';
+import DatePicker from 'react-datepicker';
+import "react-datepicker/dist/react-datepicker.css";
+import DatePickerInput from '../components/DatePickerInput';
 
 interface EditingItem extends PromoItem {
   isNew?: boolean;
+}
+
+interface EditingOrderDates {
+  orderId: string;
+  currentPickupDate: Date | null;
+  currentReturnDate: Date | null;
+  status: Order['status'];
 }
 
 function AdminDashboard() {
@@ -25,6 +35,11 @@ function AdminDashboard() {
   const [processingOrders, setProcessingOrders] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
+
+  const [isEditDatesModalOpen, setIsEditDatesModalOpen] = useState(false);
+  const [editingOrderDates, setEditingOrderDates] = useState<EditingOrderDates | null>(null);
+  const [newPickupDate, setNewPickupDate] = useState<string>('');
+  const [newReturnDate, setNewReturnDate] = useState<string>('');
 
   useEffect(() => {
     if (!user?.is_admin) {
@@ -262,6 +277,89 @@ function AdminDashboard() {
     }
   };
 
+  const handleOpenEditDatesModal = (order: Order) => {
+    const pickupDate = order.checkout_date ? parseISO(order.checkout_date) : null;
+    const returnDate = order.return_date ? parseISO(order.return_date) : null;
+    const validPickupDate = isValid(pickupDate) ? pickupDate : null;
+    const validReturnDate = isValid(returnDate) ? returnDate : null;
+
+    setEditingOrderDates({
+      orderId: order.id,
+      currentPickupDate: validPickupDate,
+      currentReturnDate: validReturnDate,
+      status: order.status
+    });
+    setNewPickupDate(validPickupDate ? format(validPickupDate, 'yyyy-MM-dd') : '');
+    setNewReturnDate(validReturnDate ? format(validReturnDate, 'yyyy-MM-dd') : '');
+    setIsEditDatesModalOpen(true);
+  };
+
+  const handleSaveOrderDates = async (newPickupDateString: string, newReturnDateString: string) => {
+    if (!editingOrderDates) return;
+
+    const today = format(new Date(), 'yyyy-MM-dd');
+    const pickupDateObj = newPickupDateString ? parse(newPickupDateString, 'yyyy-MM-dd', new Date()) : null;
+    const returnDateObj = newReturnDateString ? parse(newReturnDateString, 'yyyy-MM-dd', new Date()) : null;
+
+    if (!newReturnDateString || !returnDateObj || !isValid(returnDateObj)) {
+      setError('Invalid return date selected.');
+      return;
+    }
+    if (editingOrderDates.status === 'pending') {
+      if (!newPickupDateString || !pickupDateObj || !isValid(pickupDateObj)) {
+        setError('Invalid pickup date selected.');
+        return;
+      }
+    }
+    if (pickupDateObj && isValid(pickupDateObj) && returnDateObj && returnDateObj < pickupDateObj) {
+      setError('Return date cannot be before pickup date.');
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+
+    try {
+      const updateData: Partial<Order> = {};
+      const currentPickupISO = editingOrderDates.currentPickupDate?.toISOString().split('T')[0];
+      const currentReturnISO = editingOrderDates.currentReturnDate?.toISOString().split('T')[0];
+
+      if (editingOrderDates.status === 'pending' && newPickupDateString && newPickupDateString !== currentPickupISO) {
+        updateData.checkout_date = newPickupDateString;
+      }
+
+      if (newReturnDateString && newReturnDateString !== currentReturnISO) {
+        updateData.return_date = newReturnDateString;
+      }
+
+      if (Object.keys(updateData).length === 0) {
+        console.log('No date changes detected.');
+        setIsEditDatesModalOpen(false);
+        setEditingOrderDates(null);
+        setSaving(false);
+        return;
+      }
+
+      const { error: updateError } = await supabase
+        .from('orders')
+        .update(updateData)
+        .eq('id', editingOrderDates.orderId);
+
+      if (updateError) throw updateError;
+
+      setIsEditDatesModalOpen(false);
+      setEditingOrderDates(null);
+      await fetchOrders();
+      console.log('Order dates updated successfully');
+
+    } catch (err: any) {
+      console.error('Error updating order dates:', err);
+      setError(err.message || 'Failed to update order dates');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   if (!user?.is_admin) {
     return null;
   }
@@ -371,94 +469,72 @@ function AdminDashboard() {
 
         {activeTab === 'orders' ? (
           <div className="space-y-6">
-            {orders.length === 0 ? (
-              <div className="text-center py-12 bg-white rounded-xl shadow-sm">
-                <ShoppingBag className="mx-auto h-12 w-12 text-gray-400" />
-                <h3 className="mt-2 text-sm font-medium text-gray-900">No orders found</h3>
-                <p className="mt-1 text-sm text-gray-500">
-                  There are no orders in the system yet.
-                </p>
-              </div>
+            {loading ? (
+              <div className="text-center py-8 text-gray-500">Loading orders...</div>
+            ) : error ? (
+              <div className="text-center py-8 text-red-600">{error}</div>
+            ) : orders.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">No orders found.</div>
             ) : (
-              orders.map(order => (
-                <div key={order.id} className="bg-white rounded-xl shadow-sm overflow-hidden">
-                  <div className="p-6 border-b border-gray-100">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-4">
-                        <div className="flex-shrink-0">
-                          <div className="h-12 w-12 bg-[#2c3e50] rounded-full flex items-center justify-center">
-                            <User className="h-6 w-6 text-white" />
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>
+                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Items</th>
+                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Dates</th>
+                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {orders.map((order) => (
+                      <tr key={order.id}>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="text-sm font-medium text-gray-900">{order.user_name}</div>
+                          <div className="text-sm text-gray-500">{order.user_email}</div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <ul className="list-disc list-inside text-sm text-gray-700">
+                            {order.items.map((checkout) => (
+                              <li key={checkout.id}>
+                                {checkout.item ? `${checkout.item.name} (Qty: ${checkout.quantity})` : 'Item not found'}
+                              </li>
+                            ))}
+                          </ul>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="text-sm text-gray-900">
+                            Pickup: {order.checkout_date ? format(parseISO(order.checkout_date), 'MM/dd/yyyy') : 'N/A'}
                           </div>
-                        </div>
-                        <div>
-                          <h3 className="text-lg font-semibold text-gray-900">{order.user_name}</h3>
-                          <p className="text-sm text-gray-500">{order.user_email}</p>
-                          <p className="text-sm text-gray-500 mt-1">
-                            Ordered on {format(parseISO(order.created_at), 'MMM d, yyyy h:mm a')}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center space-x-6">
-                        <StatusDropdown
-                          status={order.status}
-                          orderId={order.id}
-                          onStatusChange={updateOrderStatus}
-                          disabled={processingOrders.has(order.id)}
-                          availableStatuses={getAvailableStatuses(order.status)}
-                        />
-                        <div className="px-4 py-2 bg-gray-50 rounded-full">
-                          <span className="text-sm font-medium text-gray-700">
-                            {order.items.reduce((sum, item) => sum + item.quantity, 0)} items
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="divide-y divide-gray-100">
-                    {order.items.map(item => (
-                      <div key={item.id} className="p-6 hover:bg-gray-50 transition-colors">
-                        <div className="flex items-center space-x-4">
-                          <div className="flex-shrink-0 h-16 w-16">
-                            {item.item?.image_url ? (
-                              <img
-                                src={item.item.image_url}
-                                alt={item.item.name}
-                                className="h-16 w-16 object-cover rounded-lg"
-                              />
-                            ) : (
-                              <div className="h-16 w-16 bg-gray-100 rounded-lg flex items-center justify-center">
-                                <Package2 className="h-8 w-8 text-gray-400" />
-                              </div>
-                            )}
+                          <div className="text-sm text-gray-500">
+                            Return: {order.return_date ? format(parseISO(order.return_date), 'MM/dd/yyyy') : 'N/A'}
                           </div>
-                          <div>
-                            <h4 className="text-lg font-medium text-gray-900">
-                              {item.item?.name}
-                            </h4>
-                            <p className="text-sm text-gray-500 mt-1">
-                              Quantity: <span className="font-medium">{item.quantity}</span>
-                            </p>
-                          </div>
-                        </div>
-                      </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <StatusDropdown
+                            status={order.status}
+                            orderId={order.id}
+                            onStatusChange={updateOrderStatus}
+                            disabled={processingOrders.has(order.id)}
+                            availableStatuses={getAvailableStatuses(order.status)}
+                          />
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                          <button
+                            onClick={() => handleOpenEditDatesModal(order)}
+                            disabled={order.status === 'returned' || order.status === 'cancelled'}
+                            className={`p-1 rounded hover:bg-gray-100 ${order.status === 'returned' || order.status === 'cancelled' ? 'text-gray-300 cursor-not-allowed' : 'text-blue-600 hover:text-blue-800'}`}
+                            title="Edit Dates"
+                          >
+                            <Edit className="h-4 w-4" />
+                          </button>
+                        </td>
+                      </tr>
                     ))}
-                  </div>
-
-                  <div className="p-6 bg-gray-50 border-t border-gray-100">
-                    <div className="flex items-center space-x-6 text-sm text-gray-500">
-                      <div className="flex items-center">
-                        <Calendar className="h-4 w-4 mr-2" />
-                        <span>Pickup: {format(parseISO(order.checkout_date), 'MMM d, yyyy')}</span>
-                      </div>
-                      <div className="flex items-center">
-                        <Calendar className="h-4 w-4 mr-2" />
-                        <span>Return: {format(parseISO(order.return_date), 'MMM d, yyyy')}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
         ) : activeTab === 'inventory' ? (
@@ -642,6 +718,62 @@ function AdminDashboard() {
                   className="px-4 py-2 bg-[#2c3e50] text-white rounded-lg shadow-sm text-sm font-medium hover:bg-[#34495e] disabled:opacity-50"
                 >
                   {saving ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isEditDatesModalOpen && editingOrderDates && (
+          <div className="fixed inset-0 z-50 overflow-y-auto bg-gray-600 bg-opacity-75 flex items-center justify-center">
+            <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md">
+              <h3 className="text-lg font-medium leading-6 text-gray-900 mb-4">Edit Order Dates</h3>
+              <p className="text-sm text-gray-600 mb-2">Order ID: {editingOrderDates.orderId}</p>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Pickup Date</label>
+                  <input
+                    type="date"
+                    value={newPickupDate}
+                    onChange={(e) => setNewPickupDate(e.target.value)}
+                    min={format(new Date(), 'yyyy-MM-dd')}
+                    disabled={editingOrderDates.status !== 'pending'}
+                    className={`w-full px-3 py-2 border rounded-md shadow-sm ${editingOrderDates.status !== 'pending' ? 'bg-gray-100 cursor-not-allowed' : 'border-gray-300'}`}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Current: {editingOrderDates.currentPickupDate ? format(editingOrderDates.currentPickupDate, 'MM/dd/yyyy') : 'N/A'}</p>
+                  {editingOrderDates.status !== 'pending' && (
+                    <p className="text-xs text-orange-500 mt-1">Cannot change pickup date after pickup.</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Return Date</label>
+                  <input
+                    type="date"
+                    value={newReturnDate}
+                    onChange={(e) => setNewReturnDate(e.target.value)}
+                    min={newPickupDate || format(new Date(), 'yyyy-MM-dd')}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Current: {editingOrderDates.currentReturnDate ? format(editingOrderDates.currentReturnDate, 'MM/dd/yyyy') : 'N/A'}</p>
+                </div>
+              </div>
+
+              <div className="mt-6 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => { setIsEditDatesModalOpen(false); setEditingOrderDates(null); }}
+                  className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSaveOrderDates(newPickupDate, newReturnDate)}
+                  disabled={saving}
+                  className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {saving ? 'Saving...' : 'Save Changes'}
                 </button>
               </div>
             </div>

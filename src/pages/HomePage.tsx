@@ -148,16 +148,16 @@ export default function HomePage() {
             const cartQuantity = getItemQuantity(item.id);
             return (
               <div key={item.id} className="bg-white rounded-xl shadow-lg overflow-hidden">
-                <div className="aspect-w-16 aspect-h-9 relative">
+                <div className="aspect-square relative">
                   {item.image_url ? (
                     <img
                       src={item.image_url}
                       alt={item.name}
-                      className="w-full h-48 object-cover"
+                      className="w-full h-full object-cover"
                     />
                   ) : (
-                    <div className="w-full h-48 bg-gray-100 flex items-center justify-center">
-                      <Package2 className="h-12 w-12 text-gray-400" />
+                    <div className="w-full h-full bg-gray-100 flex items-center justify-center">
+                      <Package2 className="h-1/3 w-1/3 text-gray-400" />
                     </div>
                   )}
                   {cartQuantity > 0 && (
