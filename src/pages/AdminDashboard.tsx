@@ -7,11 +7,11 @@ import { Link } from 'react-router-dom';
 import type { Order, PromoItem } from '../types';
 import StatusDropdown from '../components/StatusDropdown';
 import { useAuth } from '../context/AuthContext';
-import EmailPrompts from '../components/EmailPrompts';
 import DatePicker from 'react-datepicker';
 import "react-datepicker/dist/react-datepicker.css";
 import DatePickerInput from '../components/DatePickerInput';
 import vellumLogoWhite from '../Logo_Horizontal_White_wTagline_Artboard 1.svg';
+import EmailSettings from '../components/EmailSettings';
 
 interface EditingItem extends PromoItem {
   isNew?: boolean;
@@ -27,7 +27,7 @@ interface EditingOrderDates {
 function AdminDashboard() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<'inventory' | 'orders' | 'email-prompts'>('orders');
+  const [activeTab, setActiveTab] = useState<'inventory' | 'orders' | 'email-settings'>('orders');
   const [items, setItems] = useState<PromoItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [editingItem, setEditingItem] = useState<EditingItem | null>(null);
@@ -53,6 +53,8 @@ function AdminDashboard() {
       fetchItems();
     } else if (activeTab === 'orders') {
       fetchOrders();
+    } else if (activeTab === 'email-settings') {
+      setLoading(false);
     }
   }, [activeTab, user, navigate]);
 
@@ -458,15 +460,15 @@ function AdminDashboard() {
           </button>
 
           <button
-            onClick={() => setActiveTab('email-prompts')}
+            onClick={() => setActiveTab('email-settings')}
             className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${
-              activeTab === 'email-prompts'
+              activeTab === 'email-settings'
                 ? 'bg-[#2192D0] text-white'
                 : 'text-gray-300 hover:bg-[#2192D0]/80 hover:text-white'
             }`}
           >
             <Mail className="h-5 w-5" />
-            <span>Email Prompts</span>
+            <span>Email Settings</span>
           </button>
 
           <Link
@@ -485,12 +487,12 @@ function AdminDashboard() {
             <h1 className="text-2xl font-bold text-[#58595B]">
               {activeTab === 'orders' ? 'Orders' : 
                activeTab === 'inventory' ? 'Inventory' : 
-               'Email Prompts'}
+               'Email Settings'}
             </h1>
             <p className="text-gray-500 mt-1">
               {activeTab === 'orders' ? 'Manage and track customer orders' : 
                activeTab === 'inventory' ? 'Manage your inventory items' :
-               'Copy and customize email templates'}
+               'Configure automated email templates and recipients'}
             </p>
           </div>
 
@@ -670,7 +672,7 @@ function AdminDashboard() {
             </div>
           </div>
         ) : (
-          <EmailPrompts />
+          <EmailSettings />
         )}
 
         {editingItem && (

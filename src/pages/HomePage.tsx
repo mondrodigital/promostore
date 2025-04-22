@@ -112,8 +112,33 @@ export default function HomePage() {
         if (functionError) {
           // Log the error but don't block the user flow
           console.error('Error invoking send-order-notification function:', functionError);
+        } else {
+          // If internal notification succeeded (or didn't error out immediately), try sending user confirmation
+          try {
+            const userEmailPayload = {
+              orderId: data?.order_id || 'N/A', 
+              customerName: formData.name,
+              customerEmail: formData.email,
+              pickupDate: formData.pickupDate?.toLocaleDateString(),
+              returnDate: formData.returnDate?.toLocaleDateString(),
+              items: cartItems.map(item => ({ 
+                name: item.name, 
+                quantity: item.requestedQuantity 
+              })),
+            };
+            const { error: userConfirmError } = await supabase.functions.invoke('send-user-confirmation', {
+              body: userEmailPayload
+            });
+            if (userConfirmError) {
+              // Log this error too, but don't block user flow
+              console.error('Error invoking send-user-confirmation function:', userConfirmError);
+            }
+          } catch (userInvokeError) {
+             console.error('Failed to invoke send-user-confirmation function:', userInvokeError);
+          }
         }
       } catch (invokeError) {
+        // This catches errors from the internal notification invoke only
         console.error('Failed to invoke send-order-notification function:', invokeError);
       }
 
@@ -302,18 +327,6 @@ export default function HomePage() {
                       isActive={!!formData.pickupDate}
                     />
                   }
-                  popperProps={{
-                    positionFixed: true
-                  }}
-                  popperPlacement="top"
-                  popperModifiers={[
-                    {
-                      name: "offset",
-                      options: {
-                        offset: [0, 4]
-                      }
-                    }
-                  ]}
                 />
               </div>
               <div className="relative">
@@ -330,18 +343,6 @@ export default function HomePage() {
                       isActive={!!formData.returnDate}
                     />
                   }
-                  popperProps={{
-                    positionFixed: true
-                  }}
-                  popperPlacement="top"
-                  popperModifiers={[
-                    {
-                      name: "offset",
-                      options: {
-                        offset: [0, 4]
-                      }
-                    }
-                  ]}
                 />
               </div>
             </div>
