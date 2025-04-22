@@ -96,7 +96,7 @@ export default function HomePage() {
 
       // Send email notification via Supabase Edge Function
       try {
-        const { error: functionError } = await supabase.functions.invoke('send-email', {
+        const { error: functionError } = await supabase.functions.invoke('send-order-notification', {
           body: { 
             orderId: data?.order_id || 'N/A', // Assuming the RPC returns an order_id
             customerName: formData.name,
@@ -105,10 +105,10 @@ export default function HomePage() {
         });
         if (functionError) {
           // Log the error but don't block the user flow
-          console.error('Error invoking send-email function:', functionError);
+          console.error('Error invoking send-order-notification function:', functionError);
         }
       } catch (invokeError) {
-        console.error('Failed to invoke send-email function:', invokeError);
+        console.error('Failed to invoke send-order-notification function:', invokeError);
       }
 
       setFormData({
@@ -218,17 +218,20 @@ export default function HomePage() {
                     />
                     <button
                       className="flex-1 bg-[#0075AE] text-white px-4 py-2 rounded-lg hover:bg-[#005f8c] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      disabled={item.available_quantity === 0}
+                      disabled={item.available_quantity <= 0 || cartQuantity >= item.available_quantity}
                       onClick={() => {
                         const input = document.getElementById(`quantity-${item.id}`) as HTMLInputElement;
                         const quantity = parseInt(input.value);
                         if (quantity > 0 && quantity <= item.available_quantity) {
                           addToCart(item, quantity);
                           input.value = "1";
+                        } else if (quantity > item.available_quantity) {
+                          alert(`Cannot add ${quantity} - only ${item.available_quantity} available.`);
+                          input.value = item.available_quantity.toString();
                         }
                       }}
                     >
-                      Add to Cart
+                      {item.available_quantity > 0 && cartQuantity < item.available_quantity ? 'Add to Cart' : 'Out of Stock'}
                     </button>
                   </div>
                 </div>

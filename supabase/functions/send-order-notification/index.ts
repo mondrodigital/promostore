@@ -2,7 +2,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts'
 import { Resend } from 'npm:resend'
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')
-const MARKETING_EMAIL = 'marketing@vellummortgage.com'
+const RECIPIENT_EMAIL = 'mmondro@vellummortgage.com'
 
 serve(async (req) => {
   // Ensure API key is available
@@ -35,7 +35,7 @@ serve(async (req) => {
   try {
     const { data, error } = await resend.emails.send({
       from: 'Vellum Orders <orders@updates.govellum.com>',
-      to: [MARKETING_EMAIL],
+      to: [RECIPIENT_EMAIL],
       subject: `New Order Placed: ${orderData.orderId}`,
       html: `
         <h1>New Order Notification</h1>
