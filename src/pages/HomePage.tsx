@@ -98,9 +98,15 @@ export default function HomePage() {
       try {
         const { error: functionError } = await supabase.functions.invoke('send-order-notification', {
           body: { 
-            orderId: data?.order_id || 'N/A', // Assuming the RPC returns an order_id
+            orderId: data?.order_id || 'N/A', 
             customerName: formData.name,
-            // Pass any other details the Edge Function expects
+            customerEmail: formData.email,
+            pickupDate: formData.pickupDate?.toLocaleDateString(),
+            returnDate: formData.returnDate?.toLocaleDateString(),
+            items: cartItems.map(item => ({ 
+              name: item.name, 
+              quantity: item.requestedQuantity 
+            })),
           }
         });
         if (functionError) {
