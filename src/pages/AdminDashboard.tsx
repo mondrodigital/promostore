@@ -238,6 +238,8 @@ function AdminDashboard() {
   };
 
   const updateOrderStatus = async (orderId: string, newStatus: Order['status']) => {
+    const orderToNotify = orders.find(o => o.id === orderId); // Find the order details
+
     try {
       setProcessingOrders(prev => new Set([...prev, orderId]));
       setError(null);
@@ -251,6 +253,53 @@ function AdminDashboard() {
       );
 
       if (updateError) throw updateError;
+
+      // Attempt to send email notification after status update
+      if (orderToNotify) {
+        try {
+          const emailPayload = {
+            orderId: orderToNotify.id,
+            customerName: orderToNotify.user_name,
+            customerEmail: orderToNotify.user_email,
+            pickupDate: orderToNotify.checkout_date ? new Date(orderToNotify.checkout_date).toLocaleDateString() : 'N/A',
+            returnDate: orderToNotify.return_date ? new Date(orderToNotify.return_date).toLocaleDateString() : 'N/A',
+            items: orderToNotify.items.map(checkout => ({
+              name: checkout.item?.name || 'Unknown Item',
+              quantity: checkout.quantity
+            })),
+            newStatus: newStatus
+          };
+
+          // Send user notification based on status
+          let userNotificationFunction = '';
+          switch (newStatus) {
+            case 'picked_up':
+              userNotificationFunction = 'send-pickup-confirmation';
+              break;
+            case 'returned':
+              userNotificationFunction = 'send-return-confirmation';
+              break;
+            case 'cancelled':
+              userNotificationFunction = 'send-cancel-confirmation';
+              break;
+            default:
+              break;
+          }
+
+          if (userNotificationFunction) {
+            const { error: userConfirmError } = await supabase.functions.invoke(userNotificationFunction, {
+              body: emailPayload
+            });
+            if (userConfirmError) {
+              console.error(`Error sending ${userNotificationFunction}:`, userConfirmError);
+            }
+          }
+        } catch (emailError) {
+           console.error('Failed to send email notifications:', emailError);
+        }
+      } else {
+         console.warn(`Order details not found for ID ${orderId} to send status update email.`);
+      }
 
       await fetchOrders();
       await fetchItems();

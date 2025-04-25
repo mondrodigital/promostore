@@ -2,6 +2,10 @@
 UPDATE promo_items
 SET available_quantity = total_quantity;
 
+-- Drop redundant trigger and function that causes double-counting
+DROP TRIGGER IF EXISTS handle_inventory_changes ON checkouts;
+DROP FUNCTION IF EXISTS handle_inventory_changes();
+
 -- Add function to check inventory
 CREATE OR REPLACE FUNCTION check_inventory()
 RETURNS TABLE (

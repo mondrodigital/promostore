@@ -50,6 +50,57 @@ Items:
 
 Please process this order accordingly.',
     ARRAY['marketing@vellummortgage.com']::text[]
+  ),
+  (
+    'picked_up_confirmation',
+    'Equipment Pickup Confirmed',
+    'Dear {{user_name}},
+
+This email confirms that you have picked up the following items:
+
+Items:
+{{#items}}
+- {{name}} (Quantity: {{quantity}})
+{{/items}}
+
+Please remember to return these items by {{return_date}}.
+
+Best regards,
+The Events Team',
+    ARRAY['marketing@vellummortgage.com']::text[]
+  ),
+  (
+    'returned_confirmation',
+    'Equipment Return Confirmed',
+    'Dear {{user_name}},
+
+This email confirms that you have returned the following items:
+
+Items:
+{{#items}}
+- {{name}} (Quantity: {{quantity}})
+{{/items}}
+
+Thank you for using our equipment service!
+
+Best regards,
+The Events Team',
+    ARRAY['marketing@vellummortgage.com']::text[]
+  ),
+  (
+    'order_cancelled',
+    'Order Cancellation Confirmation',
+    'Dear {{user_name}},
+
+This email confirms that your order has been cancelled:
+
+Order ID: {{orderId}}
+
+If you did not request this cancellation or have any questions, please contact us.
+
+Best regards,
+The Events Team',
+    ARRAY['marketing@vellummortgage.com']::text[]
   );
 
 -- Add RLS policies
