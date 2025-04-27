@@ -50,28 +50,36 @@ serve(async (req) => {
 
   const resend = new Resend(RESEND_API_KEY)
 
-  // Extract order data from the request body
-  let orderData = {
+  // Updated structure to expect checkedOutItems and wishlistItems
+  let requestPayload = {
     orderId: 'N/A',
     customerName: 'N/A',
-    customerEmail: '', // Expecting this from the body
+    customerEmail: '',
     pickupDate: 'N/A',
     returnDate: 'N/A',
-    items: [] as { name: string; quantity: number }[]
+    eventStartDate: 'N/A',
+    eventEndDate: 'N/A',
+    checkedOutItems: [] as { name: string; quantity: number }[],
+    wishlistItems: [] as { name: string; quantity: number }[]
   }
 
   try {
     const body = await req.json()
     console.log('Received body for user confirmation:', body); // Logging for debugging
 
-    if (body && typeof body === 'object' && body.customerEmail) { // Ensure customerEmail is present
-      orderData = {
-        orderId: body.orderId || 'N/A',
+    // Validate required fields and parse payload
+    if (body && typeof body === 'object' && body.customerEmail) {
+      requestPayload = {
+        orderId: body.orderId || null, // Keep null if no order ID
         customerName: body.customerName || 'N/A',
-        customerEmail: body.customerEmail, // Use the email from the body
+        customerEmail: body.customerEmail,
         pickupDate: body.pickupDate || 'N/A',
         returnDate: body.returnDate || 'N/A',
-        items: Array.isArray(body.items) ? body.items : []
+        eventStartDate: body.eventStartDate || 'N/A',
+        eventEndDate: body.eventEndDate || 'N/A',
+        // Use the new keys from the payload
+        checkedOutItems: Array.isArray(body.checkedOutItems) ? body.checkedOutItems : [],
+        wishlistItems: Array.isArray(body.wishlistItems) ? body.wishlistItems : []
       }
     } else {
       throw new Error("Missing required data, especially customerEmail.");
@@ -89,8 +97,8 @@ serve(async (req) => {
     // --- Fetch Email Settings from DB --- 
     const { data: settingsData, error: settingsError } = await supabaseAdmin
       .from('email_settings')
-      .select('subject, body_html') // Don't need recipient for this one
-      .eq('template_id', 'user_confirmation')
+      .select('subject_template, body_template')
+      .eq('setting_name', 'user_confirmation')
       .single()
 
     if (settingsError || !settingsData) {
@@ -102,7 +110,7 @@ serve(async (req) => {
       });
     }
 
-    const { subject: subjectTemplate, body_html: bodyTemplate } = settingsData;
+    const { subject_template: subjectTemplate, body_template: bodyTemplate } = settingsData;
     if (!subjectTemplate || !bodyTemplate) {
         // Use the Headers object
         return new Response(JSON.stringify({ message: 'Missing required fields in user confirmation settings.' }), {
@@ -112,36 +120,79 @@ serve(async (req) => {
     }
     // --- End Fetch Email Settings --- 
 
-    // Generate HTML for items list
-    const itemsHtml = orderData.items.length > 0
-      ? `<ul>${orderData.items.map(item => `<li>${item.name} (Qty: ${item.quantity})</li>`).join('')}</ul>`
-      : '<p>No items specified.</p>';
+    // --- Generate HTML for Item Lists --- 
+    const generateItemsHtml = (items: { name: string; quantity: number }[]) => {
+      return items.length > 0
+        ? `<ul style="list-style-type: none; padding: 0;">${items.map(item => 
+            `<li style="padding: 8px 0; border-bottom: 1px solid #eee;">
+              ${item.name} (Qty: ${item.quantity})
+             </li>`).join('')}</ul>`
+        : ''; // Return empty string if no items
+    };
+
+    const checkedOutItemsHtml = generateItemsHtml(requestPayload.checkedOutItems);
+    const wishlistItemsHtml = generateItemsHtml(requestPayload.wishlistItems);
+
+    // --- Create Wishlist Section (Conditionally) --- 
+    let wishlistSectionHtml = '';
+    if (requestPayload.wishlistItems.length > 0) {
+      wishlistSectionHtml = `
+        <h3 style="color: #333; margin-top: 20px; margin-bottom: 10px; border-bottom: 1px solid #ccc; padding-bottom: 5px;">
+          Items Added to Wishlist
+        </h3>
+        <p style="font-size: 0.9em; color: #555; margin-bottom: 15px;">
+          These items are currently unavailable for your requested dates. We'll notify you if they become available.
+        </p>
+        ${wishlistItemsHtml}
+      `;
+    }
+
+    // Format dates to be more readable
+    const formatDate = (dateStr: string) => {
+      if (!dateStr) return 'N/A';
+      try {
+        return new Date(dateStr).toLocaleDateString('en-US', {
+          weekday: 'long',
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric'
+        });
+      } catch (e) {
+        return dateStr;
+      }
+    };
 
     // --- Replace Placeholders --- 
     const replacements = {
-      '{orderId}': orderData.orderId,
-      '{customerName}': orderData.customerName,
-      '{customerEmail}': orderData.customerEmail,
-      '{pickupDate}': orderData.pickupDate,
-      '{returnDate}': orderData.returnDate,
-      '{itemsHtml}': itemsHtml,
+      '{{orderId}}': requestPayload.orderId || 'N/A', // Handle potential null orderId
+      '{{customerName}}': requestPayload.customerName,
+      '{{customerEmail}}': requestPayload.customerEmail,
+      '{{pickupDate}}': formatDate(requestPayload.pickupDate),
+      '{{returnDate}}': formatDate(requestPayload.returnDate),
+      '{{eventStartDate}}': formatDate(requestPayload.eventStartDate),
+      '{{eventEndDate}}': formatDate(requestPayload.eventEndDate),
+      // Use the specific HTML for checked out items
+      '{{checkedOutItems}}': checkedOutItemsHtml || '<p>No items were checked out in this order.</p>', 
+      // Add the new wishlist section placeholder
+      '{{wishlistSection}}': wishlistSectionHtml, 
     };
 
     let subject = subjectTemplate;
     let bodyHtml = bodyTemplate;
     for (const [key, value] of Object.entries(replacements)) {
-      // Need to escape key for regex
-      const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); 
-      subject = subject.replace(new RegExp(escapedKey, 'g'), value || 'N/A');
-      bodyHtml = bodyHtml.replace(new RegExp(escapedKey, 'g'), value || 'N/A');
+      const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // Ensure we replace with empty string if value is null/undefined, except for orderId
+      const replacementValue = (value !== null && value !== undefined) ? String(value) : ''; 
+      subject = subject.replace(new RegExp(escapedKey, 'g'), replacementValue);
+      bodyHtml = bodyHtml.replace(new RegExp(escapedKey, 'g'), replacementValue);
     }
     // --- End Replace Placeholders --- 
 
     const { data, error } = await resend.emails.send({
-      from: 'Vellum Orders <orders@updates.govellum.com>',
-      to: [orderData.customerEmail], // Send to the customer email from request body
-      subject: subject, // Use processed subject
-      html: bodyHtml, // Use processed HTML
+      from: 'Vellum Event Items Store <events@vellummortgage.com>',
+      to: [requestPayload.customerEmail],
+      subject: subject,
+      html: bodyHtml,
     })
 
     if (error) {
