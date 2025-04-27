@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { Package2, Plus, Pencil, Trash2, X, ShoppingBag, Calendar, User, LayoutDashboard, Upload, Mail, Edit } from 'lucide-react';
+import { Package2, Plus, Pencil, Trash2, X, ShoppingBag, Calendar, User, LayoutDashboard, Upload, Mail, Edit, LogOut } from 'lucide-react';
 import { format, parseISO, isValid, parse } from 'date-fns';
 import { Link } from 'react-router-dom';
 import type { Order, PromoItem } from '../types';
@@ -13,7 +13,9 @@ import DatePickerInput from '../components/DatePickerInput';
 import vellumLogoWhite from '../Logo_Horizontal_White_wTagline_Artboard 1.svg';
 import EmailSettings from '../components/EmailSettings';
 
-interface EditingItem extends PromoItem {
+interface EditingItem extends Omit<PromoItem, 'id' | 'created_at'> {
+  id: number | null;
+  created_at?: string;
   isNew?: boolean;
 }
 
@@ -25,7 +27,7 @@ interface EditingOrderDates {
 }
 
 function AdminDashboard() {
-  const { user } = useAuth();
+  const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'inventory' | 'orders' | 'email-settings'>('orders');
   const [items, setItems] = useState<PromoItem[]>([]);
@@ -202,7 +204,7 @@ function AdminDashboard() {
     }
   };
 
-  const handleDeleteItem = async (itemId: string) => {
+  const handleDeleteItem = async (itemId: number) => {
     try {
       setError(null);
       
@@ -475,62 +477,53 @@ function AdminDashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-[#f8f9fc]">
-      <div className="fixed left-0 top-0 h-full w-64 bg-gradient-to-b from-[rgb(0,54,86)] to-[rgb(0,117,174)] text-white p-6">
-        <div className="mb-10">
-          <Link to="/">
-            <img src={vellumLogoWhite} alt="Vellum Logo" className="h-10 w-auto" />
-          </Link>
+    <div className="flex h-screen bg-gray-100">
+      <div className="w-64 bg-gradient-to-b from-[#003656] to-[#0075AE] text-white flex flex-col flex-shrink-0 shadow-lg">
+        <div className="p-6 flex items-center justify-center">
+          <img src={vellumLogoWhite} alt="Vellum Logo" className="h-12 w-auto" />
         </div>
-        
-        <nav className="space-y-2">
+        <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
           <button
             onClick={() => setActiveTab('orders')}
-            className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${
-              activeTab === 'orders'
-                ? 'bg-[#2192D0] text-white'
-                : 'text-gray-300 hover:bg-[#2192D0]/80 hover:text-white'
-            }`}
+            className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${activeTab === 'orders' ? 'bg-white/20' : 'hover:bg-white/10'}`}
           >
             <ShoppingBag className="h-5 w-5" />
-            <span>Orders</span>
+            Orders
           </button>
-          
           <button
             onClick={() => setActiveTab('inventory')}
-            className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${
-              activeTab === 'inventory'
-                ? 'bg-[#2192D0] text-white'
-                : 'text-gray-300 hover:bg-[#2192D0]/80 hover:text-white'
-            }`}
-          >
-            <LayoutDashboard className="h-5 w-5" />
-            <span>Inventory</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('email-settings')}
-            className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${
-              activeTab === 'email-settings'
-                ? 'bg-[#2192D0] text-white'
-                : 'text-gray-300 hover:bg-[#2192D0]/80 hover:text-white'
-            }`}
-          >
-            <Mail className="h-5 w-5" />
-            <span>Email Settings</span>
-          </button>
-
-          <Link
-            to="/"
-            className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors text-gray-300 hover:bg-[#2192D0]/60 hover:text-white mt-4"
+            className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${activeTab === 'inventory' ? 'bg-white/20' : 'hover:bg-white/10'}`}
           >
             <Package2 className="h-5 w-5" />
-            <span>View Store</span>
-          </Link>
+            Inventory
+          </button>
+          <button
+            onClick={() => setActiveTab('email-settings')}
+            className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${activeTab === 'email-settings' ? 'bg-white/20' : 'hover:bg-white/10'}`}
+          >
+            <Mail className="h-5 w-5" />
+            Email Settings
+          </button>
         </nav>
+        <div className="p-4 border-t border-white/20 flex-shrink-0">
+          <Link 
+            to="/"
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium bg-white/10 hover:bg-white/20 transition-colors mb-3"
+          >
+            <LayoutDashboard className="h-5 w-5" />
+            View Store
+          </Link>
+          <button
+            onClick={signOut}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium text-white bg-transparent border border-white hover:bg-white/10 transition-colors"
+          >
+            <LogOut className="h-5 w-5" />
+            Logout
+          </button>
+        </div>
       </div>
 
-      <div className="ml-64 p-8">
+      <main className="flex-1 p-6 overflow-y-auto">
         <div className="flex justify-between items-center mb-8">
           <div>
             <h1 className="text-2xl font-bold text-[#58595B]">
@@ -548,7 +541,7 @@ function AdminDashboard() {
           {activeTab === 'inventory' && (
             <button
               onClick={() => setEditingItem({
-                id: '',
+                id: null,
                 name: '',
                 description: '',
                 image_url: '',
@@ -612,7 +605,7 @@ function AdminDashboard() {
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
                       {orders.map((order) => (
-                        <tr key={order.id}>
+                        <tr key={order.id} className="border-b hover:bg-gray-50 text-sm text-gray-700">
                           <td className="px-6 py-4 whitespace-nowrap">
                             <input 
                               type="checkbox" 
@@ -626,13 +619,12 @@ function AdminDashboard() {
                             <div className="text-sm text-gray-500">{order.user_email}</div>
                           </td>
                           <td className="px-6 py-4">
-                            <ul className="list-disc list-inside text-sm text-[#58595B] opacity-80">
-                              {order.items.map((checkout) => (
-                                <li key={checkout.id}>
-                                  {checkout.item ? `${checkout.item.name} (Qty: ${checkout.quantity})` : 'Item not found'}
-                                </li>
-                              ))}
-                            </ul>
+                            {order.items.map(checkoutItem => (
+                              <div key={checkoutItem.id} className="flex items-center space-x-2 mb-1 last:mb-0">
+                                <img src={checkoutItem.item.image_url || 'https://placehold.co/40x40/png'} alt={checkoutItem.item.name} className="w-6 h-6 rounded object-cover"/>
+                                <span>{checkoutItem.item.name} (x{checkoutItem.quantity})</span>
+                              </div>
+                            ))}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="text-sm text-[#58595B]">
@@ -705,11 +697,7 @@ function AdminDashboard() {
                         <Pencil className="h-5 w-5" />
                       </button>
                       <button
-                        onClick={() => {
-                          if (confirm('Are you sure you want to delete this item?')) {
-                            handleDeleteItem(item.id);
-                          }
-                        }}
+                        onClick={() => handleDeleteItem(item.id)}
                         className="p-2 text-red-400 hover:text-red-600 rounded-lg hover:bg-red-50"
                       >
                         <Trash2 className="h-5 w-5" />
@@ -725,15 +713,15 @@ function AdminDashboard() {
         )}
 
         {editingItem && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+            <div className="bg-white p-8 rounded-lg shadow-xl w-full max-w-2xl relative max-h-[90vh] overflow-y-auto">
               <div className="flex justify-between items-center mb-6">
                 <h2 className="text-xl font-semibold text-[#58595B]">
                   {editingItem.isNew ? 'Add New Item' : 'Edit Item'}
                 </h2>
                 <button
                   onClick={() => setEditingItem(null)}
-                  disabled={saving}
+                  disabled={saving || uploadingImage}
                   className="text-gray-400 hover:text-gray-600"
                 >
                   <X className="h-5 w-5" />
@@ -828,7 +816,7 @@ function AdminDashboard() {
                       min="0"
                       max={editingItem.total_quantity}
                       value={editingItem.available_quantity}
-                      onChange={(e) => setEditingItem({ ...editingItem, available_quantity: parseInt(e.target.value) })}
+                      onChange={(e) => setEditingItem({ ...editingItem, available_quantity: Number(e.target.value) || 0 })}
                       disabled={editingItem.isNew}
                       className="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-[#2c3e50] focus:ring-[#2c3e50] disabled:bg-gray-100 disabled:cursor-not-allowed"
                     />
@@ -839,17 +827,17 @@ function AdminDashboard() {
               <div className="mt-6 flex justify-end space-x-3">
                 <button
                   onClick={() => setEditingItem(null)}
-                  disabled={saving}
+                  disabled={saving || uploadingImage}
                   className="px-4 py-2 border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-700 hover:bg-gray-50"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={() => handleSaveItem(editingItem)}
-                  disabled={saving}
+                  disabled={saving || uploadingImage}
                   className="px-4 py-2 bg-[#2c3e50] text-white rounded-lg shadow-sm text-sm font-medium hover:bg-[#34495e] disabled:opacity-50"
                 >
-                  {saving ? 'Saving...' : 'Save'}
+                  {saving ? 'Saving...' : (editingItem.isNew ? 'Add Item' : 'Save Changes')}
                 </button>
               </div>
             </div>
@@ -857,8 +845,8 @@ function AdminDashboard() {
         )}
 
         {isEditDatesModalOpen && editingOrderDates && (
-          <div className="fixed inset-0 z-50 overflow-y-auto bg-gray-600 bg-opacity-75 flex items-center justify-center">
-            <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+            <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-md relative">
               <h3 className="text-lg font-medium leading-6 text-[#58595B] mb-4">Edit Order Dates</h3>
               <p className="text-sm text-gray-600 mb-2">Order ID: {editingOrderDates.orderId}</p>
               
@@ -911,7 +899,7 @@ function AdminDashboard() {
             </div>
           </div>
         )}
-      </div>
+      </main>
     </div>
   );
 }

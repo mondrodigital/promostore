@@ -23,20 +23,18 @@ const DatePickerInput = forwardRef<HTMLButtonElement, DatePickerInputProps>(
         'focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500',
         'transition-colors duration-200',
         'bg-white',
-        isActive 
-          ? 'border-blue-500 ring-2 ring-blue-500' 
-          : 'border-gray-300 hover:border-gray-400',
+        isActive ? 'border-blue-500 ring-1 ring-blue-500' : 'border-gray-300 hover:border-gray-400',
         disabled ? 'bg-gray-100 text-gray-500 cursor-not-allowed opacity-75' : ''
       )}
     >
-      <div className="flex items-center">
-        <Calendar className="h-5 w-5 text-gray-400 mr-2 flex-shrink-0" />
+      <div className="flex items-center justify-between">
         <span className={clsx(
           'truncate',
           value ? 'text-gray-900' : 'text-gray-500'
         )}>
-          {value ? format(value, 'MMM d, yyyy') : placeholder}
+          {value ? format(value, 'MMM d, yyyy') : placeholder} 
         </span>
+        <Calendar className="h-4 w-4 text-gray-400 ml-2 flex-shrink-0" />
       </div>
     </button>
   )

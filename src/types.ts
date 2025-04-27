@@ -1,22 +1,21 @@
 export interface PromoItem {
-  id: string;
+  id: number;
+  created_at: string;
   name: string;
   description: string | null;
-  image_url: string | null;
   total_quantity: number;
   available_quantity: number;
-  created_at?: string;
+  image_url: string | null;
 }
 
 export interface Checkout {
-  id: string;
-  user_id: string;
-  item_id: string;
-  quantity: number;
+  id: number;
+  created_at: string;
+  item_id: number;
   checkout_date: string;
   return_date: string;
-  returned: boolean;
-  created_at: string;
+  quantity: number;
+  order_id: number;
 }
 
 export interface User {
@@ -43,4 +42,8 @@ export interface OrderItem {
   item_id: string;
   quantity: number;
   item: PromoItem;
+}
+
+export interface CartItem extends PromoItem {
+  requestedQuantity: number;
 }

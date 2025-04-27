@@ -1,9 +1,5 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import type { PromoItem } from '../types';
-
-interface CartItem extends PromoItem {
-  requestedQuantity: number;
-}
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import type { PromoItem, CartItem } from '../types';
 
 interface CartContextType {
   items: CartItem[];
@@ -13,88 +9,156 @@ interface CartContextType {
   updateQuantity: (itemId: string, quantity: number) => void;
   getItemQuantity: (itemId: string) => number;
   getTotalQuantity: () => number;
+  wishlistItems: CartItem[];
+  addToWishlist: (item: PromoItem, quantity: number) => void;
+  removeFromWishlist: (itemId: string) => void;
+  clearWishlist: () => void;
+  getWishlistItemQuantity: (itemId: string) => number;
+  getTotalWishlistQuantity: () => number;
 }
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
 
 const CART_STORAGE_KEY = 'promo_inventory_cart';
 
-export function CartProvider({ children }: { children: React.ReactNode }) {
-  const [items, setItems] = useState<CartItem[]>(() => {
-    // Load initial state from localStorage
-    const savedCart = localStorage.getItem(CART_STORAGE_KEY);
-    return savedCart ? JSON.parse(savedCart) : [];
-  });
+// Helper to load from session storage
+const loadFromSession = <T,>(key: string, defaultValue: T): T => {
+  try {
+    const stored = sessionStorage.getItem(key);
+    return stored ? JSON.parse(stored) : defaultValue;
+  } catch (error) {
+    console.error(`Error reading sessionStorage key \"${key}\":`, error);
+    return defaultValue;
+  }
+};
 
-  // Save to localStorage whenever cart changes
+export function CartProvider({ children }: { children: React.ReactNode }) {
+  const [items, setItems] = useState<CartItem[]>(() => loadFromSession<CartItem[]>('cartItems', []));
+  const [wishlistItems, setWishlistItems] = useState<CartItem[]>(() => loadFromSession<CartItem[]>('wishlistItems', []));
+
+  // Save cart items to session storage whenever they change
   useEffect(() => {
-    localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(items));
+    try {
+      sessionStorage.setItem('cartItems', JSON.stringify(items));
+    } catch (error) {
+      console.error('Error writing cartItems to sessionStorage:', error);
+    }
   }, [items]);
 
-  const addToCart = (item: PromoItem, quantity: number) => {
-    setItems(currentItems => {
-      const existingItem = currentItems.find(i => i.id === item.id);
+  // Save wishlist items to session storage whenever they change
+  useEffect(() => {
+    try {
+      sessionStorage.setItem('wishlistItems', JSON.stringify(wishlistItems));
+    } catch (error) {
+      console.error('Error writing wishlistItems to sessionStorage:', error);
+    }
+  }, [wishlistItems]);
+
+  const addToCart = useCallback((item: PromoItem, quantity: number) => {
+    setItems(prevItems => {
+      const existingItem = prevItems.find(i => String(i.id) === String(item.id));
       if (existingItem) {
-        return currentItems.map(i =>
-          i.id === item.id
+        // Update quantity if item already exists
+        return prevItems.map(i =>
+          String(i.id) === String(item.id)
             ? { ...i, requestedQuantity: i.requestedQuantity + quantity }
             : i
         );
+      } else {
+        // Add new item to cart
+        return [...prevItems, { ...item, requestedQuantity: quantity }];
       }
-      return [...currentItems, { ...item, requestedQuantity: quantity }];
     });
-  };
+  }, []);
 
-  const removeFromCart = (itemId: string) => {
-    setItems(currentItems => currentItems.filter(item => item.id !== itemId));
-  };
+  const removeFromCart = useCallback((itemId: string) => {
+    setItems(prevItems => prevItems.filter(item => String(item.id) !== itemId));
+  }, []);
 
-  const clearCart = () => {
+  const clearCart = useCallback(() => {
     setItems([]);
-  };
+    sessionStorage.removeItem('cartItems'); // Clear storage too
+  }, []);
 
   const updateQuantity = (itemId: string, quantity: number) => {
-    if (quantity <= 0) {
-      removeFromCart(itemId);
-      return;
-    }
-
     setItems(currentItems =>
       currentItems.map(item =>
-        item.id === itemId
-          ? { ...item, requestedQuantity: quantity }
+        String(item.id) === itemId // Compare as strings
+          ? { ...item, requestedQuantity: quantity > 0 ? quantity : 0 } // Ensure quantity doesn't go below 0
           : item
-      )
+      ).filter(item => item.requestedQuantity > 0) // Remove item if quantity is 0
     );
   };
 
-  const getItemQuantity = (itemId: string) => {
-    return items.find(item => item.id === itemId)?.requestedQuantity || 0;
-  };
+  const getItemQuantity = useCallback((itemId: string): number => {
+    const item = items.find(i => String(i.id) === itemId);
+    return item ? item.requestedQuantity : 0;
+  }, [items]);
 
-  const getTotalQuantity = () => {
+  const getTotalQuantity = useCallback((): number => {
     return items.reduce((total, item) => total + item.requestedQuantity, 0);
+  }, [items]);
+
+  // --- Wishlist Functions ---
+  const addToWishlist = useCallback((item: PromoItem, quantity: number) => {
+    setWishlistItems(prevItems => {
+      const existingItem = prevItems.find(i => String(i.id) === String(item.id));
+      if (existingItem) {
+        // Update quantity if item already exists
+        return prevItems.map(i =>
+          String(i.id) === String(item.id)
+            ? { ...i, requestedQuantity: i.requestedQuantity + quantity }
+            : i
+        );
+      } else {
+        // Add new item to wishlist
+        return [...prevItems, { ...item, requestedQuantity: quantity }];
+      }
+    });
+  }, []);
+
+  const removeFromWishlist = useCallback((itemId: string) => {
+    setWishlistItems(prevItems => prevItems.filter(item => String(item.id) !== itemId));
+  }, []);
+
+  const clearWishlist = useCallback(() => {
+    setWishlistItems([]);
+    sessionStorage.removeItem('wishlistItems'); // Clear storage too
+  }, []);
+
+  const getWishlistItemQuantity = useCallback((itemId: string): number => {
+    const item = wishlistItems.find(i => String(i.id) === itemId);
+    return item ? item.requestedQuantity : 0;
+  }, [wishlistItems]);
+
+   const getTotalWishlistQuantity = useCallback((): number => {
+    return wishlistItems.reduce((total, item) => total + item.requestedQuantity, 0);
+  }, [wishlistItems]);
+
+  // Updated context value
+  const value: CartContextType = {
+    items,
+    addToCart,
+    removeFromCart,
+    clearCart,
+    updateQuantity,
+    getItemQuantity,
+    getTotalQuantity,
+    wishlistItems,
+    addToWishlist,
+    removeFromWishlist,
+    clearWishlist,
+    getWishlistItemQuantity,
+    getTotalWishlistQuantity,
   };
 
-  return (
-    <CartContext.Provider value={{
-      items,
-      addToCart,
-      removeFromCart,
-      clearCart,
-      updateQuantity,
-      getItemQuantity,
-      getTotalQuantity,
-    }}>
-      {children}
-    </CartContext.Provider>
-  );
+  return <CartContext.Provider value={value}>{children}</CartContext.Provider>;
 }
 
-export function useCart() {
+export function useCart(): CartContextType {
   const context = useContext(CartContext);
   if (context === undefined) {
-    throw new Error('useCart must be used within a CartProvider');
+    throw new Error('useCart must be used within an CartProvider');
   }
   return context;
 }

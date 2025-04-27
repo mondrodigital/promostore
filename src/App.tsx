@@ -11,6 +11,8 @@ function App() {
     <BrowserRouter>
       <AuthProvider>
         <CartProvider>
+          {/* Portal target for date pickers - REMOVED */}
+          {/* <div id="datepicker-portal" style={{ position: 'relative', zIndex: 9999 }}></div> */}
           <Routes>
             <Route path="/" element={<HomePage />} />
             <Route path="/admin" element={<AdminDashboard />} />

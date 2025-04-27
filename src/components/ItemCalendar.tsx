@@ -15,7 +15,7 @@ interface ItemSchedule {
 }
 
 interface ItemCalendarProps {
-  itemId: string;
+  itemId: number;
   itemName: string;
 }
 
@@ -184,8 +184,8 @@ export default function ItemCalendar({ itemId, itemName }: ItemCalendarProps) {
     const end = endOfMonth(currentDate);
     const days = eachDayOfInterval({ start, end });
 
-    const weeks = [];
-    let week = [];
+    const weeks: (Date | null)[][] = [];
+    let week: (Date | null)[] = [];
 
     // Add empty cells for days before the first of the month
     const firstDay = start.getDay();
