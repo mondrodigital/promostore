@@ -26,6 +26,26 @@
 
 .react-datepicker__month {
   @apply p-2;
+  /* You might want some margin between months */
+  /* margin: 0.4em; */
+}
+
+/* Add flex display to the main datepicker container when multiple months are shown */
+.react-datepicker.react-datepicker--show-months {
+  /* Apply flex, ensure horizontal flow, and center the months */
+  @apply flex flex-row justify-center;
+  /* You might need to adjust width if the container is constrained */
+  /* width: max-content; */
+}
+
+/* Ensure month containers don't force stacking */
+.react-datepicker.react-datepicker--show-months .react-datepicker__month-container {
+  /* Try forcing inline-block display within the flex container */
+  display: inline-block; 
+  /* Add some spacing between months */
+  @apply mx-2; /* Example: Tailwind margin utility */
+  /* Ensure vertical alignment is consistent if needed */
+  vertical-align: top; 
 }
 
 .react-datepicker__day {

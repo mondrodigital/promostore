@@ -159,7 +159,7 @@ export default function TopBookingBar({
           <div className="fixed inset-0 bg-black bg-opacity-50" onClick={() => setModalType(null)}></div>
 
           {/* Modal Content */}
-          <div className="relative bg-white p-6 rounded-lg shadow-xl z-50 w-full max-w-lg mx-4">
+          <div className="relative bg-white p-6 rounded-lg shadow-xl z-50 w-full max-w-2xl mx-4">
              <button onClick={() => setModalType(null)} className="absolute top-3 right-3 text-gray-500 hover:text-gray-700">
                <X className="h-5 w-5" />
              </button>
