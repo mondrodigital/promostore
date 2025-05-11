@@ -30,8 +30,8 @@ export interface Order {
   id: string;
   user_name: string;
   user_email: string;
-  checkout_date: string;
-  return_date: string;
+  checkout_date: string | null;
+  return_date: string | null;
   created_at: string;
   status: 'pending' | 'picked_up' | 'returned' | 'cancelled';
   items: OrderItem[];

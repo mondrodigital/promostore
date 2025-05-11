@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase';
 import { Package2, Plus, Pencil, Trash2, X, ShoppingBag, Calendar, User, LayoutDashboard, Upload, Mail, Edit, LogOut } from 'lucide-react';
 import { format, parseISO, isValid, parse } from 'date-fns';
 import { Link } from 'react-router-dom';
-import type { Order, PromoItem } from '../types';
+import type { Order as BaseOrder, PromoItem as BasePromoItem, Checkout as BaseCheckout } from '../types';
 import StatusDropdown from '../components/StatusDropdown';
 import { useAuth } from '../context/AuthContext';
 import DatePicker from 'react-datepicker';
@@ -13,7 +13,55 @@ import DatePickerInput from '../components/DatePickerInput';
 import vellumLogoWhite from '../Logo_Horizontal_White_wTagline_Artboard 1.svg';
 import EmailSettings from '../components/EmailSettings';
 
-interface EditingItem extends Omit<PromoItem, 'id' | 'created_at'> {
+// --- Re-introduce specific types for fetched data ---
+
+// Extend PromoItem if necessary or use it directly
+interface WishlistItemDetails extends BasePromoItem {
+  // Add specific fields if different from BasePromoItem
+  available_quantity: number; // Add available_quantity from promo_items
+}
+
+// Type for the data structure from the wishlist_requests query (used within Edge Function)
+/* // Not directly needed by component if Edge Function returns OrderWithDetails
+interface WishlistRequestWithItem {
+  id: string;
+  user_email: string;
+  item_id: string;
+  requested_quantity: number;
+  status: string;
+  item: WishlistItemDetails | null;
+}
+*/
+
+// Helper type for checkout items with joined item details
+interface CheckoutWithItem extends Omit<BaseCheckout, 'item_id' | 'item'> {
+  item: BasePromoItem | null;
+}
+
+// Type for the formatted associated wishlist items added to the order object
+interface AssociatedWishlistItem {
+  wishlist_request_id: string;
+  item: WishlistItemDetails | null;
+  quantity: number;
+  isWishlistItem: boolean;
+  status: 'pending' | 'fulfilled' | 'added_to_order' | string; // Add status from wishlist_requests
+}
+
+// Type for the combined order data returned by the Edge Function
+interface OrderWithDetails extends Omit<BaseOrder, 'items'> {
+  items: CheckoutWithItem[];
+  associatedWishlistItems: AssociatedWishlistItem[];
+  id: string;
+  created_at: string;
+  user_name: string;
+  user_email: string;
+  checkout_date: string | null;
+  return_date: string | null;
+  status: 'pending' | 'picked_up' | 'returned' | 'cancelled';
+}
+// --- End Type Definitions ---
+
+interface EditingItem extends Omit<BasePromoItem, 'id' | 'created_at'> {
   id: number | null;
   created_at?: string;
   isNew?: boolean;
@@ -23,15 +71,15 @@ interface EditingOrderDates {
   orderId: string;
   currentPickupDate: Date | null;
   currentReturnDate: Date | null;
-  status: Order['status'];
+  status: OrderWithDetails['status']; // Use status from new type
 }
 
 function AdminDashboard() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'inventory' | 'orders' | 'email-settings'>('orders');
-  const [items, setItems] = useState<PromoItem[]>([]);
-  const [orders, setOrders] = useState<Order[]>([]);
+  const [items, setItems] = useState<BasePromoItem[]>([]);
+  const [orders, setOrders] = useState<OrderWithDetails[]>([]);
   const [editingItem, setEditingItem] = useState<EditingItem | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -81,37 +129,56 @@ function AdminDashboard() {
   };
 
   const fetchOrders = async () => {
+    console.log("fetchOrders called"); // Log start
     try {
       setLoading(true);
       setError(null);
-      
-      const { data: ordersData, error: ordersError } = await supabase
-        .from('orders')
-        .select(`
-          *,
-          items:checkouts (
-            id,
-            item_id,
-            quantity,
-            item:promo_items (
-              id,
-              name,
-              description,
-              image_url,
-              total_quantity,
-              available_quantity
-            )
-          )
-        `)
-        .order('created_at', { ascending: false });
 
-      if (ordersError) throw ordersError;
-      setOrders(ordersData || []);
+      // Invoke the Edge Function to get combined order and wishlist data
+      console.log("Invoking get-orders-with-wishlists Edge Function...");
+      const { data: combinedOrdersData, error: functionError } = await supabase.functions.invoke(
+        'get-orders-with-wishlists',
+        {
+          // No body needed for this GET-like request, but options can be added if required
+          // Example: method: 'POST', body: { someParam: 'value' }
+        }
+      );
+
+      if (functionError) {
+        console.error("Edge function invocation error:", functionError);
+        // Try to parse potential error message from function response
+        let message = functionError.message;
+        try {
+            const errorDetails = JSON.parse(functionError.context?.responseText || '{}');
+            if(errorDetails.error) message = `Function Error: ${errorDetails.error}`;
+        } catch(e) { /* Ignore parsing errors */ }
+        throw new Error(message || "Failed to fetch data from Edge Function.");
+      }
+
+      if (!combinedOrdersData) {
+         console.log("Edge function returned no data.");
+         setOrders([]); // Set to empty array if function returns null/undefined
+         throw new Error("Edge function returned no data.");
+      }
+      
+      // Ensure the data is an array (Edge Function should return OrderWithDetails[])
+      if (!Array.isArray(combinedOrdersData)) {
+          console.error("Data from edge function is not an array:", combinedOrdersData);
+          throw new Error("Received invalid data format from Edge Function.");
+      }
+
+      console.log("Successfully received data from Edge Function:", combinedOrdersData);
+
+      // Set the state with the data received from the Edge Function
+      setOrders(combinedOrdersData as OrderWithDetails[]); // Assert type after validation
+
     } catch (err: any) {
-      console.error('Error fetching orders:', err);
-      setError(err.message);
+      console.error('Error in fetchOrders (invoking function):', err);
+      setError(err.message || "An unexpected error occurred while fetching order data.");
+      setOrders([]); // Clear orders on error
     } finally {
       setLoading(false);
+      console.log("fetchOrders finished"); // Log end
     }
   };
 
@@ -232,21 +299,21 @@ function AdminDashboard() {
     }
   };
 
-  const handleEditItem = (item: PromoItem) => {
+  const handleEditItem = (item: BasePromoItem) => {
     setEditingItem({
       ...item,
       isNew: false
     });
   };
 
-  const updateOrderStatus = async (orderId: string, newStatus: Order['status']) => {
-    const orderToNotify = orders.find(o => o.id === orderId); // Find the order details
+  const updateOrderStatus = async (orderId: string, newStatus: OrderWithDetails['status']) => {
+    const orderToNotify = orders.find(o => o.id === orderId);
 
     try {
       setProcessingOrders(prev => new Set([...prev, orderId]));
       setError(null);
 
-      const { error: updateError } = await supabase.rpc(
+      const { data: resultData, error: updateError } = await supabase.rpc(
         'update_order_status',
         {
           p_order_id: orderId,
@@ -254,9 +321,16 @@ function AdminDashboard() {
         }
       );
 
-      if (updateError) throw updateError;
+      if (updateError) {
+        console.error('RPC Error:', updateError);
+        throw updateError;
+      }
 
-      // Attempt to send email notification after status update
+      if (resultData && resultData.success === false) {
+        console.error('Function Logic Error:', resultData.message);
+        throw new Error(resultData.message || 'Status update failed within the database function.');
+      }
+
       if (orderToNotify) {
         try {
           const emailPayload = {
@@ -272,7 +346,6 @@ function AdminDashboard() {
             newStatus: newStatus
           };
 
-          // Send user notification based on status
           let userNotificationFunction = '';
           switch (newStatus) {
             case 'picked_up':
@@ -307,7 +380,7 @@ function AdminDashboard() {
       await fetchItems();
     } catch (err: any) {
       console.error('Error updating order status:', err);
-      setError(err.message);
+      setError(err.message || 'An unexpected error occurred during status update.');
     } finally {
       setProcessingOrders(prev => {
         const next = new Set(prev);
@@ -317,7 +390,7 @@ function AdminDashboard() {
     }
   };
 
-  const getAvailableStatuses = (currentStatus: Order['status']): Order['status'][] => {
+  const getAvailableStatuses = (currentStatus: OrderWithDetails['status']): OrderWithDetails['status'][] => {
     switch (currentStatus) {
       case 'pending':
         return ['pending', 'picked_up', 'cancelled'];
@@ -332,7 +405,7 @@ function AdminDashboard() {
     }
   };
 
-  const handleOpenEditDatesModal = (order: Order) => {
+  const handleOpenEditDatesModal = (order: OrderWithDetails) => {
     const pickupDate = order.checkout_date ? parseISO(order.checkout_date) : null;
     const returnDate = order.return_date ? parseISO(order.return_date) : null;
     const validPickupDate = isValid(pickupDate) ? pickupDate : null;
@@ -375,7 +448,7 @@ function AdminDashboard() {
     setError(null);
 
     try {
-      const updateData: Partial<Order> = {};
+      const updateData: Partial<OrderWithDetails> = {};
       const currentPickupISO = editingOrderDates.currentPickupDate?.toISOString().split('T')[0];
       const currentReturnISO = editingOrderDates.currentReturnDate?.toISOString().split('T')[0];
 
@@ -464,6 +537,78 @@ function AdminDashboard() {
     }
   };
 
+  const handleFulfillWishlistItem = async (
+    wishlistRequestId: string,
+    orderId: string,
+    userEmail: string,
+    userName: string,
+    itemName: string,
+    itemQuantity: number
+  ) => {
+    if (!window.confirm(`Add "${itemName}" (x${itemQuantity}) to order ${orderId} for ${userName}? This cannot be undone.`)) {
+      return;
+    }
+
+    setProcessingOrders(prev => new Set([...prev, orderId]));
+    setError(null);
+
+    try {
+      const { data: rpcData, error: rpcError } = await supabase.rpc(
+        'fulfill_wishlist_item',
+        {
+          p_wishlist_request_id: parseInt(wishlistRequestId, 10),
+          p_target_order_id: orderId
+        }
+      );
+
+      if (rpcError) {
+        console.error('RPC Error fulfilling wishlist:', rpcError);
+        throw new Error(`Database error: ${rpcError.message}`);
+      }
+
+      if (!rpcData || rpcData.success === false) {
+        console.error('RPC Logic Error fulfilling wishlist:', rpcData?.message);
+        throw new Error(rpcData?.message || 'Failed to fulfill wishlist item in database.');
+      }
+
+      console.log('Wishlist item fulfilled successfully via RPC. Sending notification...');
+      try {
+         const emailPayload = {
+           userEmail: userEmail,
+           userName: userName,
+           itemName: itemName,
+           itemQuantity: itemQuantity,
+           orderId: orderId
+         };
+
+         const { error: emailError } = await supabase.functions.invoke(
+            'send-wishlist-available-notification',
+            { body: emailPayload }
+         );
+
+         if (emailError) {
+             console.error('Error sending wishlist fulfillment notification:', emailError);
+         } else {
+             console.log('Wishlist fulfillment notification sent.');
+         }
+      } catch (emailInvokeError) {
+           console.error('Error invoking email function:', emailInvokeError);
+      }
+
+      await fetchOrders();
+
+    } catch (err: any) {
+      console.error('Error in handleFulfillWishlistItem:', err);
+      setError(err.message || 'An unexpected error occurred during fulfillment.');
+    } finally {
+      setProcessingOrders(prev => {
+        const next = new Set(prev);
+        next.delete(orderId);
+        return next;
+      });
+    }
+  };
+
   if (!user?.is_admin) {
     return null;
   }
@@ -475,6 +620,20 @@ function AdminDashboard() {
       </div>
     );
   }
+
+  // --- DEBUG LOG --- 
+  console.log('[AdminDashboard Render]', { 
+    activeTab, 
+    loading, 
+    error, 
+    items, // Log the items state directly
+    isItemsArray: Array.isArray(items) // Explicitly check if it's an array
+  });
+  // --- END DEBUG LOG ---
+
+  // --- ADD DEBUG LOG FOR ORDERS STATE --- 
+  console.log('[AdminDashboard Render] Final orders state before render:', orders);
+  // --- END DEBUG LOG --- 
 
   return (
     <div className="flex h-screen bg-gray-100">
@@ -604,57 +763,115 @@ function AdminDashboard() {
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
-                      {orders.map((order) => (
-                        <tr key={order.id} className="border-b hover:bg-gray-50 text-sm text-gray-700">
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <input 
-                              type="checkbox" 
-                              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                              checked={selectedOrderIds.has(order.id)}
-                              onChange={(e) => handleSelectOrder(order.id, e.target.checked)}
-                            />
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="text-sm font-medium text-[#58595B]">{order.user_name}</div>
-                            <div className="text-sm text-gray-500">{order.user_email}</div>
-                          </td>
-                          <td className="px-6 py-4">
-                            {order.items.map(checkoutItem => (
-                              <div key={checkoutItem.id} className="flex items-center space-x-2 mb-1 last:mb-0">
-                                <img src={checkoutItem.item.image_url || 'https://placehold.co/40x40/png'} alt={checkoutItem.item.name} className="w-6 h-6 rounded object-cover"/>
-                                <span>{checkoutItem.item.name} (x{checkoutItem.quantity})</span>
+                      {!loading && !error && Array.isArray(orders) && orders.length > 0 ? (
+                        orders.map((order) => (
+                          <tr key={order.id} className="border-b hover:bg-gray-50 text-sm text-gray-700">
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <input 
+                                type="checkbox" 
+                                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                checked={selectedOrderIds.has(order.id)}
+                                onChange={(e) => handleSelectOrder(order.id, e.target.checked)}
+                              />
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="text-sm font-medium text-[#58595B]">{order.user_name}</div>
+                              <div className="text-sm text-gray-500">{order.user_email}</div>
+                            </td>
+                            <td className="px-6 py-4">
+                              {/* Map over actual checked-out items */} 
+                              {Array.isArray(order.items) && order.items.map(checkoutItem => (
+                                <div key={`checkout-${checkoutItem.id}`} className="flex items-center space-x-2 mb-1 last:mb-0 bg-white p-1 rounded">
+                                  <img src={checkoutItem.item?.image_url || 'https://placehold.co/40x40/png'} alt={checkoutItem.item?.name ?? 'Item'} className="w-6 h-6 rounded object-cover flex-shrink-0"/>
+                                  <span title={checkoutItem.item?.description || checkoutItem.item?.name || ''} className="truncate">{checkoutItem.item?.name ?? 'Unknown Item'} (x{checkoutItem.quantity})</span>
+                                </div>
+                              ))}
+                            
+                              {/* Map over associated wishlist items */} 
+                              {Array.isArray(order.associatedWishlistItems) && order.associatedWishlistItems
+                                .filter(wishlistItem => wishlistItem.status === 'pending')
+                                .map((wishlistItem) => {
+                                // --- ADD DEBUG LOG INSIDE WISHLIST MAP --- 
+                                console.log(`[Wishlist Map] Rendering wishlist item for order ${order.id}:`, wishlistItem);
+                                // --- END DEBUG LOG --- 
+                                const canFulfill = order.status === 'pending' && wishlistItem.status === 'pending' && wishlistItem.item && wishlistItem.item.available_quantity >= wishlistItem.quantity;
+                                return (
+                                  <div 
+                                    key={`wishlist-${wishlistItem.wishlist_request_id}`} 
+                                    className="flex items-center justify-between space-x-2 mt-2 mb-1 last:mb-0 bg-orange-50 p-1 rounded border border-orange-200"
+                                  >
+                                    {/* Left side: Image and Text */}
+                                    <div className="flex items-center space-x-2 flex-grow min-w-0">
+                                      <img 
+                                        src={wishlistItem.item?.image_url || 'https://placehold.co/40x40/png'} 
+                                        alt={wishlistItem.item?.name ?? 'Wishlist item'} 
+                                        className="w-6 h-6 rounded object-cover opacity-70 flex-shrink-0" // Keep faded style
+                                      />
+                                      <span 
+                                        title={wishlistItem.item?.description || wishlistItem.item?.name || ''} 
+                                        className="italic text-orange-800 truncate" // Keep italic/orange style
+                                      >
+                                        {wishlistItem.item?.name ?? 'Unknown Item'} (Wishlist x{wishlistItem.quantity})
+                                      </span>
+                                    </div>
+                                    
+                                    {/* Right side: Fulfill Button (Conditional) */}
+                                    {canFulfill && (
+                                      <button
+                                        onClick={() => handleFulfillWishlistItem(
+                                          wishlistItem.wishlist_request_id,
+                                          order.id,
+                                          order.user_email, 
+                                          order.user_name,
+                                          wishlistItem.item?.name ?? 'Unknown Item',
+                                          wishlistItem.quantity
+                                        )}
+                                        disabled={processingOrders.has(order.id)} // Disable if order is processing
+                                        className="px-2 py-0.5 bg-green-600 text-white text-xs rounded hover:bg-green-700 transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                                      >
+                                        {processingOrders.has(order.id) ? '...' : 'Fulfill'}
+                                      </button>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <div className="text-sm text-[#58595B]">
+                                Pickup: {order.checkout_date ? format(parseISO(order.checkout_date), 'MM/dd/yyyy') : 'N/A'}
                               </div>
-                            ))}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="text-sm text-[#58595B]">
-                              Pickup: {order.checkout_date ? format(parseISO(order.checkout_date), 'MM/dd/yyyy') : 'N/A'}
-                            </div>
-                            <div className="text-sm text-gray-500">
-                              Return: {order.return_date ? format(parseISO(order.return_date), 'MM/dd/yyyy') : 'N/A'}
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <StatusDropdown
-                              status={order.status}
-                              orderId={order.id}
-                              onStatusChange={updateOrderStatus}
-                              disabled={processingOrders.has(order.id)}
-                              availableStatuses={getAvailableStatuses(order.status)}
-                            />
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                            <button
-                              onClick={() => handleOpenEditDatesModal(order)}
-                              disabled={order.status === 'returned' || order.status === 'cancelled'}
-                              className={`p-1 rounded hover:bg-gray-100 ${order.status === 'returned' || order.status === 'cancelled' ? 'text-gray-300 cursor-not-allowed' : 'text-blue-600 hover:text-blue-800'}`}
-                              title="Edit Dates"
-                            >
-                              <Edit className="h-4 w-4" />
-                            </button>
+                              <div className="text-sm text-gray-500">
+                                Return: {order.return_date ? format(parseISO(order.return_date), 'MM/dd/yyyy') : 'N/A'}
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap">
+                              <StatusDropdown
+                                status={order.status}
+                                orderId={order.id}
+                                onStatusChange={updateOrderStatus}
+                                disabled={processingOrders.has(order.id)}
+                                availableStatuses={getAvailableStatuses(order.status)}
+                              />
+                            </td>
+                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                              <button
+                                onClick={() => handleOpenEditDatesModal(order)}
+                                disabled={order.status === 'returned' || order.status === 'cancelled'}
+                                className={`p-1 rounded hover:bg-gray-100 ${order.status === 'returned' || order.status === 'cancelled' ? 'text-gray-300 cursor-not-allowed' : 'text-blue-600 hover:text-blue-800'}`}
+                                title="Edit Dates"
+                              >
+                                <Edit className="h-4 w-4" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={6} className="px-6 py-12 text-center text-gray-500">
+                            {!loading && !error ? 'No orders found.' : ''}
                           </td>
                         </tr>
-                      ))}
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -664,48 +881,53 @@ function AdminDashboard() {
         ) : activeTab === 'inventory' ? (
           <div className="bg-white rounded-xl shadow-sm overflow-hidden">
             <div className="divide-y divide-gray-100">
-              {items.map((item) => (
-                <div key={item.id} className="p-6 hover:bg-gray-50 transition-colors">
-                  <div className="flex items-center space-x-4">
-                    <div className="flex-shrink-0 h-16 w-16">
-                      {item.image_url ? (
-                        <img
-                          className="h-16 w-16 rounded-lg object-cover"
-                          src={item.image_url}
-                          alt={item.name}
-                        />
-                      ) : (
-                        <div className="h-16 w-16 rounded-lg bg-gray-100 flex items-center justify-center">
-                          <Package2 className="h-8 w-8 text-gray-400" />
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <h3 className="text-lg font-medium text-[#58595B]">{item.name}</h3>
-                      <p className="text-sm text-gray-500">{item.description}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-sm font-medium text-[#58595B]">
-                        Available: {item.available_quantity} / {item.total_quantity}
-                      </p>
-                    </div>
-                    <div className="flex space-x-2">
-                      <button
-                        onClick={() => handleEditItem(item)}
-                        className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
-                      >
-                        <Pencil className="h-5 w-5" />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteItem(item.id)}
-                        className="p-2 text-red-400 hover:text-red-600 rounded-lg hover:bg-red-50"
-                      >
-                        <Trash2 className="h-5 w-5" />
-                      </button>
-                    </div>
-                  </div>
+              {items.length === 0 ? (
+                <div className="p-6 text-center text-gray-400">No inventory items found.</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200 table-auto">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Image</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider min-w-[200px]">Description</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Qty</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Available Qty</th>
+                        <th className="px-4 py-3 w-20"></th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {items.map(item => (
+                        <tr key={item.id}>
+                          <td className="px-4 py-4">
+                            <img src={item.image_url || 'https://placehold.co/40x40/png'} alt={item.name} className="w-10 h-10 rounded object-cover" />
+                          </td>
+                          <td className="px-4 py-4">{item.name}</td>
+                          <td className="px-4 py-4 break-words max-w-xs">{item.description}</td>
+                          <td className="px-4 py-4">{item.total_quantity}</td>
+                          <td className="px-4 py-4">{item.available_quantity}</td>
+                          <td className="px-4 py-4">
+                            <button
+                              onClick={() => handleEditItem(item)}
+                              className="text-blue-600 hover:text-blue-900 mr-2"
+                              title="Edit"
+                            >
+                              <Pencil className="h-4 w-4 inline" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteItem(item.id)}
+                              className="text-red-600 hover:text-red-900"
+                              title="Delete"
+                            >
+                              <Trash2 className="h-4 w-4 inline" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-              ))}
+              )}
             </div>
           </div>
         ) : (

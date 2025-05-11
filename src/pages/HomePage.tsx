@@ -164,6 +164,7 @@ export default function HomePage() {
       // --- 2. Handle Wishlist Items (Save Request) ---
       if (wishlistItems.length > 0) {
          const wishlistRequestsPayload = wishlistItems.map(item => ({
+            order_id: orderId,
             user_name: formData.name,
             user_email: formData.email,
             item_id: item.id,
