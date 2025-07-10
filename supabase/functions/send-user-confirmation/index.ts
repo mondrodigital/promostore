@@ -199,6 +199,46 @@ serve(async (req) => {
       throw error; // Let the catch block handle Resend errors
     }
 
+    // Send calendar invites for pickup and return
+    try {
+      // Send pickup calendar invite
+      const pickupStartTime = new Date(requestPayload.pickupDate);
+      const pickupEndTime = new Date(pickupStartTime.getTime() + 60 * 60 * 1000); // 1 hour duration
+      
+      await supabaseAdmin.functions.invoke('send-calendar-invite', {
+        body: {
+          eventType: 'pickup',
+          orderId: requestPayload.orderId,
+          customerName: requestPayload.customerName,
+          customerEmail: requestPayload.customerEmail,
+          startTime: pickupStartTime.toISOString(),
+          endTime: pickupEndTime.toISOString(),
+          location: 'Vellum Marketing Office',
+          additionalAttendees: ['marketing@vellummortgage.com']
+        }
+      });
+
+      // Send return calendar invite
+      const returnStartTime = new Date(requestPayload.returnDate);
+      const returnEndTime = new Date(returnStartTime.getTime() + 60 * 60 * 1000); // 1 hour duration
+      
+      await supabaseAdmin.functions.invoke('send-calendar-invite', {
+        body: {
+          eventType: 'return',
+          orderId: requestPayload.orderId,
+          customerName: requestPayload.customerName,
+          customerEmail: requestPayload.customerEmail,
+          startTime: returnStartTime.toISOString(),
+          endTime: returnEndTime.toISOString(),
+          location: 'Vellum Marketing Office',
+          additionalAttendees: ['marketing@vellummortgage.com']
+        }
+      });
+    } catch (calendarError) {
+      console.error('Failed to send calendar invites:', calendarError);
+      // Don't throw the error - we still want to return success for the email
+    }
+
     console.log('User confirmation email sent successfully:', data)
     // Use the Headers object
     return new Response(JSON.stringify({ message: 'User confirmation email sent successfully', data }), {

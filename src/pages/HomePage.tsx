@@ -213,6 +213,54 @@ export default function HomePage() {
                  await supabase.functions.invoke('send-order-notification', { body: notificationPayload });
                  await supabase.functions.invoke('send-user-confirmation', { body: notificationPayload });
 
+                 // Send calendar invites for pickup and return dates
+                 if (formData.pickupDate && formData.returnDate) {
+                     try {
+                         // Create pickup reminder
+                         const pickupStartTime = new Date(formData.pickupDate);
+                         pickupStartTime.setHours(9, 0, 0, 0); // Default to 9 AM
+                         const pickupEndTime = new Date(pickupStartTime);
+                         pickupEndTime.setHours(10, 0, 0, 0); // 1 hour duration
+
+                         const pickupInvite = {
+                             orderId: orderId,
+                             customerName: formData.name,
+                             customerEmail: formData.email,
+                             eventType: 'pickup',
+                             startTime: pickupStartTime.toISOString(),
+                             endTime: pickupEndTime.toISOString(),
+                             location: 'Vellum Marketing Office',
+                             additionalAttendees: ['marketing@vellummortgage.com']
+                         };
+
+                         // Create return reminder  
+                         const returnStartTime = new Date(formData.returnDate);
+                         returnStartTime.setHours(9, 0, 0, 0); // Default to 9 AM
+                         const returnEndTime = new Date(returnStartTime);
+                         returnEndTime.setHours(10, 0, 0, 0); // 1 hour duration
+
+                         const returnInvite = {
+                             orderId: orderId,
+                             customerName: formData.name,
+                             customerEmail: formData.email,
+                             eventType: 'return',
+                             startTime: returnStartTime.toISOString(),
+                             endTime: returnEndTime.toISOString(),
+                             location: 'Vellum Marketing Office',
+                             additionalAttendees: ['marketing@vellummortgage.com']
+                         };
+
+                         // Send calendar invites
+                         await supabase.functions.invoke('send-calendar-invite', { body: pickupInvite });
+                         await supabase.functions.invoke('send-calendar-invite', { body: returnInvite });
+
+                         console.log('Calendar invites sent for pickup and return dates');
+                     } catch (calendarError) {
+                         console.error('Failed to send calendar invites:', calendarError);
+                         // Don't block the main flow if calendar fails
+                     }
+                 }
+
             } catch (invokeError) {
                 console.error('Failed to invoke combined notification functions:', invokeError);
                 // Decide if this should block success message? Probably not.
@@ -230,9 +278,9 @@ export default function HomePage() {
       // Construct success message
       let successMessage = "";
       if (orderSuccessful && wishlistSaved) {
-          successMessage = "Order submitted and wishlist request saved! See email for details.";
+          successMessage = "Order submitted and wishlist request saved! Check your email for confirmation and calendar invites.";
       } else if (orderSuccessful) {
-          successMessage = "Order submitted successfully! See email for details.";
+          successMessage = "Order submitted successfully! Check your email for confirmation and calendar invites for pickup/return.";
       } else if (wishlistSaved) {
           successMessage = "Your wishlist request has been submitted! See email for details.";
       } else {
