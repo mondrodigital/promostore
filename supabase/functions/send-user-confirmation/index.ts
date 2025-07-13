@@ -18,6 +18,43 @@ const corsHeaders = (origin: string | null) => ({
   'Vary': 'Origin', // Important for caching based on Origin
 });
 
+// Calendar URL generation functions (embedded directly in the function)
+function generateCalendarButtonsHtml(event: {
+  title: string;
+  description: string;
+  startDate: Date;
+  endDate: Date;
+  location: string;
+}): string {
+  const { title, description, startDate, endDate, location } = event;
+  
+  // Format dates for calendar providers
+  const formatDateForGoogle = (date: Date) => {
+    return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+  };
+
+  // Encode text for URLs
+  const encodeText = (text: string) => encodeURIComponent(text);
+
+  // Generate URLs
+  const googleUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeText(title)}&dates=${formatDateForGoogle(startDate)}/${formatDateForGoogle(endDate)}&details=${encodeText(description)}&location=${encodeText(location)}&sf=true&output=xml`;
+  
+  const outlookUrl = `https://outlook.live.com/calendar/0/deeplink/compose?subject=${encodeText(title)}&startdt=${formatDateForGoogle(startDate)}&enddt=${formatDateForGoogle(endDate)}&body=${encodeText(description)}&location=${encodeText(location)}`;
+  
+  const outlook365Url = `https://outlook.office.com/calendar/0/deeplink/compose?subject=${encodeText(title)}&startdt=${formatDateForGoogle(startDate)}&enddt=${formatDateForGoogle(endDate)}&body=${encodeText(description)}&location=${encodeText(location)}`;
+  
+  return `
+    <div style="margin: 20px 0; padding: 15px; background-color: #f8f9fa; border-radius: 8px; border-left: 4px solid #0075AE;">
+      <h3 style="margin: 0 0 10px 0; color: #333; font-size: 16px;">📅 ${title}</h3>
+      <p style="margin: 0 0 15px 0; color: #666; font-size: 14px;">Click to add this reminder to your calendar:</p>
+      <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+        <a href="${googleUrl}" target="_blank" style="display: inline-block; padding: 8px 16px; background-color: #4285f4; color: white; text-decoration: none; border-radius: 4px; font-size: 14px;">📅 Google Calendar</a>
+        <a href="${outlookUrl}" target="_blank" style="display: inline-block; padding: 8px 16px; background-color: #0078d4; color: white; text-decoration: none; border-radius: 4px; font-size: 14px;">📅 Outlook</a>
+        <a href="${outlook365Url}" target="_blank" style="display: inline-block; padding: 8px 16px; background-color: #0078d4; color: white; text-decoration: none; border-radius: 4px; font-size: 14px;">📅 Office 365</a>
+      </div>
+    </div>`;
+}
+
 serve(async (req) => {
   const requestOrigin = req.headers.get('Origin');
   // Create base headers object using the function
@@ -147,6 +184,47 @@ serve(async (req) => {
       `;
     }
 
+    // --- Generate Calendar Links Section ---
+    let calendarLinksHtml = '';
+    if (requestPayload.pickupDate !== 'N/A' && requestPayload.returnDate !== 'N/A') {
+      try {
+        const pickupDate = new Date(requestPayload.pickupDate);
+        const returnDate = new Date(requestPayload.returnDate);
+        
+        // Set default times (9-10 AM)
+        const pickupStart = new Date(pickupDate);
+        pickupStart.setHours(9, 0, 0, 0);
+        const pickupEnd = new Date(pickupDate);
+        pickupEnd.setHours(10, 0, 0, 0);
+        
+        const returnStart = new Date(returnDate);
+        returnStart.setHours(9, 0, 0, 0);
+        const returnEnd = new Date(returnDate);
+        returnEnd.setHours(10, 0, 0, 0);
+
+        const pickupButtons = generateCalendarButtonsHtml({
+          title: `Equipment Pickup - Order #${requestPayload.orderId}`,
+          description: `Pick up your equipment for order #${requestPayload.orderId}. Please arrive at the specified time.`,
+          startDate: pickupStart,
+          endDate: pickupEnd,
+          location: 'Vellum Marketing Office'
+        });
+
+        const returnButtons = generateCalendarButtonsHtml({
+          title: `Equipment Return - Order #${requestPayload.orderId}`,
+          description: `Return your equipment for order #${requestPayload.orderId}. Please ensure all items are returned in good condition.`,
+          startDate: returnStart,
+          endDate: returnEnd,
+          location: 'Vellum Marketing Office'
+        });
+
+        calendarLinksHtml = pickupButtons + returnButtons;
+      } catch (dateError) {
+        console.error('Error generating calendar links:', dateError);
+        // Continue without calendar links if dates are invalid
+      }
+    }
+
     // Format dates to be more readable
     const formatDate = (dateStr: string) => {
       if (!dateStr) return 'N/A';
@@ -174,7 +252,9 @@ serve(async (req) => {
       // Use the specific HTML for checked out items
       '{{checkedOutItems}}': checkedOutItemsHtml || '<p>No items were checked out in this order.</p>', 
       // Add the new wishlist section placeholder
-      '{{wishlistSection}}': wishlistSectionHtml, 
+      '{{wishlistSection}}': wishlistSectionHtml,
+      // Add calendar links section
+      '{{calendarLinks}}': calendarLinksHtml
     };
 
     let subject = subjectTemplate;
@@ -199,46 +279,6 @@ serve(async (req) => {
       throw error; // Let the catch block handle Resend errors
     }
 
-    // Send calendar invites for pickup and return
-    try {
-      // Send pickup calendar invite
-      const pickupStartTime = new Date(requestPayload.pickupDate);
-      const pickupEndTime = new Date(pickupStartTime.getTime() + 60 * 60 * 1000); // 1 hour duration
-      
-      await supabaseAdmin.functions.invoke('send-calendar-invite', {
-        body: {
-          eventType: 'pickup',
-          orderId: requestPayload.orderId,
-          customerName: requestPayload.customerName,
-          customerEmail: requestPayload.customerEmail,
-          startTime: pickupStartTime.toISOString(),
-          endTime: pickupEndTime.toISOString(),
-          location: 'Vellum Marketing Office',
-          additionalAttendees: ['marketing@vellummortgage.com']
-        }
-      });
-
-      // Send return calendar invite
-      const returnStartTime = new Date(requestPayload.returnDate);
-      const returnEndTime = new Date(returnStartTime.getTime() + 60 * 60 * 1000); // 1 hour duration
-      
-      await supabaseAdmin.functions.invoke('send-calendar-invite', {
-        body: {
-          eventType: 'return',
-          orderId: requestPayload.orderId,
-          customerName: requestPayload.customerName,
-          customerEmail: requestPayload.customerEmail,
-          startTime: returnStartTime.toISOString(),
-          endTime: returnEndTime.toISOString(),
-          location: 'Vellum Marketing Office',
-          additionalAttendees: ['marketing@vellummortgage.com']
-        }
-      });
-    } catch (calendarError) {
-      console.error('Failed to send calendar invites:', calendarError);
-      // Don't throw the error - we still want to return success for the email
-    }
-
     console.log('User confirmation email sent successfully:', data)
     // Use the Headers object
     return new Response(JSON.stringify({ message: 'User confirmation email sent successfully', data }), {
@@ -252,7 +292,7 @@ serve(async (req) => {
     // Use the Headers object
     return new Response(JSON.stringify({ message: `Internal Server Error: ${errorMessage}` }), {
       status: 500,
-      headers: baseHeaders 
+      headers: baseHeaders
     })
   }
 }) 
