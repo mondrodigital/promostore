@@ -18,7 +18,8 @@ ALTER TABLE promo_items DISABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Admins can manage promo items" ON promo_items;
 DROP POLICY IF EXISTS "Public can view promo items" ON promo_items;
 
--- Create debugging function
+-- Drop and recreate debugging function
+DROP FUNCTION IF EXISTS debug_auth();
 CREATE OR REPLACE FUNCTION debug_auth() 
 RETURNS TABLE (
   authenticated boolean,

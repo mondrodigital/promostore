@@ -16,6 +16,7 @@ VALUES (
 );
 
 -- Create policy for public access to view files
+DROP POLICY IF EXISTS "Public Access" ON storage.objects;
 CREATE POLICY "Public Access"
 ON storage.objects
 FOR SELECT
@@ -23,16 +24,18 @@ TO public
 USING (bucket_id = 'promo-items');
 
 -- Create policy for public to upload files
+DROP POLICY IF EXISTS "Anyone can upload images" ON storage.objects;
 CREATE POLICY "Anyone can upload images"
 ON storage.objects
 FOR INSERT
 TO public
 WITH CHECK (
-  bucket_id = 'promo-items' 
+  bucket_id = 'promo-items'
   AND LENGTH(name) > 1
 );
 
 -- Create policy for public to update files
+DROP POLICY IF EXISTS "Anyone can update images" ON storage.objects;
 CREATE POLICY "Anyone can update images"
 ON storage.objects
 FOR UPDATE
@@ -41,6 +44,7 @@ USING (bucket_id = 'promo-items')
 WITH CHECK (bucket_id = 'promo-items');
 
 -- Create policy for public to delete files
+DROP POLICY IF EXISTS "Anyone can delete images" ON storage.objects;
 CREATE POLICY "Anyone can delete images"
 ON storage.objects
 FOR DELETE

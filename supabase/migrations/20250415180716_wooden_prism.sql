@@ -3,6 +3,7 @@ INSERT INTO storage.buckets (id, name, public)
 VALUES ('promo-items', 'promo-items', true);
 
 -- Allow public access to promo-items bucket
+DROP POLICY IF EXISTS "Public Access" ON storage.objects;
 CREATE POLICY "Public Access"
 ON storage.objects
 FOR ALL

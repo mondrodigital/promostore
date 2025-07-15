@@ -6,6 +6,7 @@ export interface PromoItem {
   total_quantity: number;
   available_quantity: number;
   image_url: string | null;
+  category: 'Tents' | 'Tables' | 'Linens' | 'Displays' | 'Decor' | 'Games' | 'Misc';
 }
 
 export interface Checkout {
@@ -33,7 +34,7 @@ export interface Order {
   checkout_date: string | null;
   return_date: string | null;
   created_at: string;
-  status: 'pending' | 'picked_up' | 'returned' | 'cancelled';
+  status: 'pending' | 'picked_up' | 'returned' | 'cancelled' | 'wishlist_only';
   items: OrderItem[];
 }
 

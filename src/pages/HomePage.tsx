@@ -13,20 +13,7 @@ import { format } from 'date-fns';
 // Define Category type (can be moved to types.ts later)
 type Category = 'All' | 'Tents' | 'Tables' | 'Linens' | 'Displays' | 'Decor' | 'Games' | 'Misc';
 
-// Helper function to determine category from item name (simple version)
-const getItemCategory = (itemName: string): Category => {
-  const lowerName = itemName.toLowerCase();
-  if (lowerName.includes('tent')) return 'Tents';
-  if (lowerName.includes('table') && !lowerName.includes('cover') && !lowerName.includes('cloth') && !lowerName.includes('runner')) return 'Tables';
-  if (lowerName.includes('cover') || lowerName.includes('cloth') || lowerName.includes('runner')) return 'Linens';
-  if (lowerName.includes('banner') || lowerName.includes('easel') || lowerName.includes('frame') || lowerName.includes('riser') || lowerName.includes('stand')) return 'Displays';
-  if (lowerName.includes('house') || lowerName.includes('jar')) return 'Decor';
-  if (lowerName.includes('cornhole')) return 'Games';
-  if (lowerName.includes('tub')) return 'Misc'; 
-  // Fallback or decide if unclassified items should show in 'All' only or a specific category
-  // For now, let them appear only in 'All' by not matching explicitly
-  return 'Misc'; // Default fallback, adjust as needed
-};
+
 
 export default function HomePage() {
   const [items, setItems] = useState<PromoItem[]>([]);
@@ -137,8 +124,9 @@ export default function HomePage() {
     let wishlistSaved = false;
 
     try {
-      // --- 1. Handle Cart Items (Actual Order) ---
+      // --- 1. Create Order (for cart items OR wishlist-only requests) ---
       if (cartItems.length > 0) {
+        // Normal order with cart items
         const orderItemsPayload = cartItems.map(item => ({
           item_id: item.id,
           quantity: item.requestedQuantity
@@ -157,12 +145,31 @@ export default function HomePage() {
 
         if (submitError) throw new Error(`Order submission failed: ${submitError.message}`);
         
-        orderSuccessful = true; // Assume success if no error thrown
-        orderId = data?.order_id || null; // Capture order ID if available
+        orderSuccessful = true;
+        orderId = data?.order_id || null;
+        
+      } else if (wishlistItems.length > 0) {
+        // Wishlist-only: Create a placeholder order for tracking
+        const { data, error: wishlistOrderError } = await supabase
+          .from('orders')
+          .insert([{
+            user_name: formData.name,
+            user_email: formData.email,
+            checkout_date: formData.pickupDate.toISOString().split('T')[0],
+            return_date: formData.returnDate.toISOString().split('T')[0],
+            status: 'wishlist_only' // Special status for wishlist-only orders
+          }])
+          .select('id')
+          .single();
+
+        if (wishlistOrderError) throw new Error(`Wishlist order creation failed: ${wishlistOrderError.message}`);
+        
+        orderId = data?.id || null;
+        console.log("Created wishlist-only order with ID:", orderId);
       }
 
       // --- 2. Handle Wishlist Items (Save Request) ---
-      if (wishlistItems.length > 0) {
+      if (wishlistItems.length > 0 && orderId) {
          const wishlistRequestsPayload = wishlistItems.map(item => ({
             order_id: orderId,
             user_name: formData.name,
@@ -178,16 +185,17 @@ export default function HomePage() {
 
          console.log("Saving wishlist requests:", wishlistRequestsPayload);
          
-         const { error: wishlistError } = await supabase.rpc(
+         const { data: wishlistData, error: wishlistError } = await supabase.rpc(
            'add_wishlist_requests', 
            { requests: wishlistRequestsPayload }
          );
          if (wishlistError) {
             console.error("Error saving wishlist requests:", wishlistError);
-            // Decide if this should prevent proceeding (e.g., show error and stop)
+            console.error("Wishlist payload that failed:", wishlistRequestsPayload);
             throw new Error(`Failed to save wishlist request: ${wishlistError.message}`);
          }
-         wishlistSaved = true; // Set only if RPC call succeeds
+         console.log("Successfully saved wishlist requests:", wishlistData);
+         wishlistSaved = true;
       }
       
       // --- 3. Send Combined Notifications (if cart order OR wishlist saved) ---
@@ -302,7 +310,7 @@ export default function HomePage() {
     if (activeFilter === 'All') {
       return items;
     }
-    return items.filter(item => getItemCategory(item.name) === activeFilter);
+    return items.filter(item => item.category === activeFilter);
   }, [items, activeFilter]);
 
   const handleDismissBanner = () => {

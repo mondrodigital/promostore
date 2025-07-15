@@ -16,7 +16,8 @@ DROP TABLE IF EXISTS checkouts CASCADE;
 DROP TABLE IF EXISTS orders CASCADE;
 DROP TABLE IF EXISTS promo_items CASCADE;
 
--- Create enum type for order status
+-- Drop and recreate enum type for order status
+DROP TYPE IF EXISTS order_status CASCADE;
 CREATE TYPE order_status AS ENUM ('pending', 'picked_up', 'returned', 'cancelled');
 
 -- Create tables

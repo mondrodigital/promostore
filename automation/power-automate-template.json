@@ -1,0 +1,173 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {},
+    "triggers": {
+      "When_a_new_email_arrives_(V3)": {
+        "type": "ApiConnectionWebhook",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['office365']['connectionId']"
+            }
+          },
+          "body": {
+            "folderPath": "Inbox",
+            "to": "marketing@vellummortgage.com",
+            "importance": "Any",
+            "fetchOnlyWithAttachment": false,
+            "includeAttachments": false
+          },
+          "path": "/v3/Mail/OnNewEmail"
+        }
+      }
+    },
+    "actions": {
+      "Condition_-_Check_if_order_email": {
+        "type": "If",
+        "expression": {
+          "or": [
+            {
+              "contains": [
+                "@triggerBody()?['subject']",
+                "Order"
+              ]
+            },
+            {
+              "contains": [
+                "@triggerBody()?['subject']",
+                "Equipment"
+              ]
+            }
+          ]
+        },
+        "actions": {
+          "Parse_pickup_date": {
+            "type": "Compose",
+            "inputs": "@split(split(triggerBody()?['body'], 'Pickup Date: ')[1], '\n')[0]"
+          },
+          "Parse_return_date": {
+            "type": "Compose", 
+            "inputs": "@split(split(triggerBody()?['body'], 'Return Date: ')[1], '\n')[0]"
+          },
+          "Parse_customer_email": {
+            "type": "Compose",
+            "inputs": "@split(split(triggerBody()?['body'], 'Customer Email: ')[1], '\n')[0]"
+          },
+          "Parse_customer_name": {
+            "type": "Compose",
+            "inputs": "@split(split(triggerBody()?['body'], 'Customer Name: ')[1], '\n')[0]"
+          },
+          "Parse_order_id": {
+            "type": "Compose",
+            "inputs": "@split(split(triggerBody()?['body'], 'Order ID: ')[1], '\n')[0]"
+          },
+          "Create_pickup_calendar_event": {
+            "type": "ApiConnection",
+            "inputs": {
+              "host": {
+                "connection": {
+                  "name": "@parameters('$connections')['office365']['connectionId']"
+                }
+              },
+              "method": "post",
+              "body": {
+                "subject": "Equipment Pickup - Order @{outputs('Parse_order_id')}",
+                "start": {
+                  "dateTime": "@{outputs('Parse_pickup_date')}T09:00:00",
+                  "timeZone": "Eastern Standard Time"
+                },
+                "end": {
+                  "dateTime": "@{outputs('Parse_pickup_date')}T10:00:00", 
+                  "timeZone": "Eastern Standard Time"
+                },
+                "location": {
+                  "displayName": "Vellum Marketing Office"
+                },
+                "body": {
+                  "content": "Equipment pickup for order @{outputs('Parse_order_id')}. Please arrive at the specified time.",
+                  "contentType": "Text"
+                },
+                "attendees": [
+                  {
+                    "emailAddress": {
+                      "address": "@{outputs('Parse_customer_email')}",
+                      "name": "@{outputs('Parse_customer_name')}"
+                    }
+                  },
+                  {
+                    "emailAddress": {
+                      "address": "marketing@vellummortgage.com",
+                      "name": "Marketing Team"
+                    }
+                  }
+                ],
+                "isReminderOn": true,
+                "reminderMinutesBeforeStart": 60
+              },
+              "path": "/v4/me/events"
+            }
+          },
+          "Create_return_calendar_event": {
+            "type": "ApiConnection", 
+            "inputs": {
+              "host": {
+                "connection": {
+                  "name": "@parameters('$connections')['office365']['connectionId']"
+                }
+              },
+              "method": "post",
+              "body": {
+                "subject": "Equipment Return - Order @{outputs('Parse_order_id')}",
+                "start": {
+                  "dateTime": "@{outputs('Parse_return_date')}T09:00:00",
+                  "timeZone": "Eastern Standard Time"
+                },
+                "end": {
+                  "dateTime": "@{outputs('Parse_return_date')}T10:00:00",
+                  "timeZone": "Eastern Standard Time"
+                },
+                "location": {
+                  "displayName": "Vellum Marketing Office"
+                },
+                "body": {
+                  "content": "Equipment return for order @{outputs('Parse_order_id')}. Please return all items in good condition.",
+                  "contentType": "Text"
+                },
+                "attendees": [
+                  {
+                    "emailAddress": {
+                      "address": "@{outputs('Parse_customer_email')}",
+                      "name": "@{outputs('Parse_customer_name')}"
+                    }
+                  },
+                  {
+                    "emailAddress": {
+                      "address": "marketing@vellummortgage.com", 
+                      "name": "Marketing Team"
+                    }
+                  }
+                ],
+                "isReminderOn": true,
+                "reminderMinutesBeforeStart": 60
+              },
+              "path": "/v4/me/events"
+            }
+          }
+        }
+      }
+    }
+  },
+  "parameters": {
+    "$connections": {
+      "value": {
+        "office365": {
+          "connectionId": "/subscriptions/{subscription-id}/resourceGroups/{resource-group}/providers/Microsoft.Web/connections/office365",
+          "connectionName": "office365",
+          "id": "/subscriptions/{subscription-id}/providers/Microsoft.Web/locations/{location}/managedApis/office365"
+        }
+      }
+    }
+  }
+} 

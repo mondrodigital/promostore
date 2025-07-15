@@ -57,7 +57,7 @@ interface OrderWithDetails extends Omit<BaseOrder, 'items'> {
   user_email: string;
   checkout_date: string | null;
   return_date: string | null;
-  status: 'pending' | 'picked_up' | 'returned' | 'cancelled';
+  status: 'pending' | 'picked_up' | 'returned' | 'cancelled' | 'wishlist_only';
 }
 // --- End Type Definitions ---
 
@@ -169,6 +169,8 @@ function AdminDashboard() {
 
       console.log("Successfully received data from Edge Function:", combinedOrdersData);
 
+
+
       // Set the state with the data received from the Edge Function
       setOrders(combinedOrdersData as OrderWithDetails[]); // Assert type after validation
 
@@ -240,7 +242,8 @@ function AdminDashboard() {
         description: item.description?.trim() || null,
         image_url: item.image_url?.trim() || null,
         total_quantity: item.total_quantity,
-        available_quantity: item.isNew ? item.total_quantity : item.available_quantity
+        available_quantity: item.isNew ? item.total_quantity : item.available_quantity,
+        category: item.category || 'Misc'
       };
 
       let result;
@@ -400,6 +403,8 @@ function AdminDashboard() {
         return ['returned'];
       case 'cancelled':
         return ['cancelled'];
+      case 'wishlist_only':
+        return ['wishlist_only', 'cancelled'];
       default:
         return [];
     }
@@ -553,6 +558,21 @@ function AdminDashboard() {
     setError(null);
 
     try {
+      // First, check if the order is wishlist_only and update it to pending
+      const order = orders.find(o => o.id === orderId);
+      if (order?.status === 'wishlist_only') {
+        console.log('Converting wishlist_only order to pending...');
+        const { error: statusError } = await supabase
+          .from('orders')
+          .update({ status: 'pending' })
+          .eq('id', orderId);
+        
+        if (statusError) {
+          console.error('Error updating order status:', statusError);
+          throw new Error(`Failed to update order status: ${statusError.message}`);
+        }
+      }
+
       const { data: rpcData, error: rpcError } = await supabase.rpc(
         'fulfill_wishlist_item',
         {
@@ -577,8 +597,10 @@ function AdminDashboard() {
            userEmail: userEmail,
            userName: userName,
            itemName: itemName,
-           itemQuantity: itemQuantity,
-           orderId: orderId
+           requestedQuantity: itemQuantity,
+           orderId: orderId,
+           requestedPickupDate: order?.checkout_date || 'N/A',
+           requestedReturnDate: order?.return_date || 'N/A'
          };
 
          const { error: emailError } = await supabase.functions.invoke(
@@ -706,6 +728,7 @@ function AdminDashboard() {
                 image_url: '',
                 total_quantity: 0,
                 available_quantity: 0,
+                category: 'Misc',
                 isNew: true
               })}
               className="flex items-center px-4 py-2 bg-[#2c3e50] text-white rounded-lg hover:bg-[#34495e] transition-colors"
@@ -778,63 +801,95 @@ function AdminDashboard() {
                               <div className="text-sm font-medium text-[#58595B]">{order.user_name}</div>
                               <div className="text-sm text-gray-500">{order.user_email}</div>
                             </td>
+                            {/* Items Column - Combined checked out and wishlist items */}
                             <td className="px-6 py-4">
-                              {/* Map over actual checked-out items */} 
-                              {Array.isArray(order.items) && order.items.map(checkoutItem => (
-                                <div key={`checkout-${checkoutItem.id}`} className="flex items-center space-x-2 mb-1 last:mb-0 bg-white p-1 rounded">
-                                  <img src={checkoutItem.item?.image_url || 'https://placehold.co/40x40/png'} alt={checkoutItem.item?.name ?? 'Item'} className="w-6 h-6 rounded object-cover flex-shrink-0"/>
-                                  <span title={checkoutItem.item?.description || checkoutItem.item?.name || ''} className="truncate">{checkoutItem.item?.name ?? 'Unknown Item'} (x{checkoutItem.quantity})</span>
-                                </div>
-                              ))}
-                            
-                              {/* Map over associated wishlist items */} 
-                              {Array.isArray(order.associatedWishlistItems) && order.associatedWishlistItems
-                                .filter(wishlistItem => wishlistItem.status === 'pending')
-                                .map((wishlistItem) => {
-                                // --- ADD DEBUG LOG INSIDE WISHLIST MAP --- 
-                                console.log(`[Wishlist Map] Rendering wishlist item for order ${order.id}:`, wishlistItem);
-                                // --- END DEBUG LOG --- 
-                                const canFulfill = order.status === 'pending' && wishlistItem.status === 'pending' && wishlistItem.item && wishlistItem.item.available_quantity >= wishlistItem.quantity;
-                                return (
-                                  <div 
-                                    key={`wishlist-${wishlistItem.wishlist_request_id}`} 
-                                    className="flex items-center justify-between space-x-2 mt-2 mb-1 last:mb-0 bg-orange-50 p-1 rounded border border-orange-200"
-                                  >
-                                    {/* Left side: Image and Text */}
-                                    <div className="flex items-center space-x-2 flex-grow min-w-0">
-                                      <img 
-                                        src={wishlistItem.item?.image_url || 'https://placehold.co/40x40/png'} 
-                                        alt={wishlistItem.item?.name ?? 'Wishlist item'} 
-                                        className="w-6 h-6 rounded object-cover opacity-70 flex-shrink-0" // Keep faded style
-                                      />
-                                      <span 
-                                        title={wishlistItem.item?.description || wishlistItem.item?.name || ''} 
-                                        className="italic text-orange-800 truncate" // Keep italic/orange style
-                                      >
-                                        {wishlistItem.item?.name ?? 'Unknown Item'} (Wishlist x{wishlistItem.quantity})
-                                      </span>
-                                    </div>
-                                    
-                                    {/* Right side: Fulfill Button (Conditional) */}
-                                    {canFulfill && (
-                                      <button
-                                        onClick={() => handleFulfillWishlistItem(
-                                          wishlistItem.wishlist_request_id,
-                                          order.id,
-                                          order.user_email, 
-                                          order.user_name,
-                                          wishlistItem.item?.name ?? 'Unknown Item',
-                                          wishlistItem.quantity
-                                        )}
-                                        disabled={processingOrders.has(order.id)} // Disable if order is processing
-                                        className="px-2 py-0.5 bg-green-600 text-white text-xs rounded hover:bg-green-700 transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
-                                      >
-                                        {processingOrders.has(order.id) ? '...' : 'Fulfill'}
-                                      </button>
-                                    )}
+                              <div className="space-y-3">
+                                {/* Checked Out Items Section */}
+                                {Array.isArray(order.items) && order.items.length > 0 && (
+                                  <div>
+                                    <div className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Checked Out</div>
+                                    {order.items.map(checkoutItem => (
+                                      <div key={`checkout-${checkoutItem.id}`} className="flex items-center space-x-2 mb-1 last:mb-0 bg-green-50 p-2 rounded border border-green-200">
+                                        <img src={checkoutItem.item?.image_url || 'https://placehold.co/40x40/png'} alt={checkoutItem.item?.name ?? 'Item'} className="w-6 h-6 rounded object-cover flex-shrink-0"/>
+                                        <div className="flex-grow min-w-0">
+                                          <div className="text-sm font-medium text-green-800 truncate" title={checkoutItem.item?.description || checkoutItem.item?.name || ''}>
+                                            {checkoutItem.item?.name ?? 'Unknown Item'}
+                                          </div>
+                                          <div className="text-xs text-green-600">
+                                            Quantity: {checkoutItem.quantity}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    ))}
                                   </div>
-                                );
-                              })}
+                                )}
+                                
+                                {/* Wishlist Items Section */}
+                                {Array.isArray(order.associatedWishlistItems) && order.associatedWishlistItems.filter(item => item.status === 'pending').length > 0 && (
+                                  <div>
+                                    <div className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1">Wishlist</div>
+                                    {order.associatedWishlistItems
+                                      .filter((wishlistItem) => wishlistItem.status === 'pending')
+                                      .map((wishlistItem) => {
+                                        const effectiveQuantity = Math.min(wishlistItem.quantity, wishlistItem.item?.available_quantity || 0);
+                                        const canFulfill = (order.status === 'pending' || order.status === 'wishlist_only') && wishlistItem.status === 'pending' && wishlistItem.item && wishlistItem.item.available_quantity >= effectiveQuantity && effectiveQuantity > 0;
+                                        return (
+                                          <div 
+                                            key={`wishlist-${wishlistItem.wishlist_request_id}`} 
+                                            className="flex items-center justify-between space-x-2 mb-1 last:mb-0 bg-orange-50 p-2 rounded border border-orange-200"
+                                          >
+                                            {/* Left side: Image and Text */}
+                                            <div className="flex items-center space-x-2 flex-grow min-w-0">
+                                              <img 
+                                                src={wishlistItem.item?.image_url || 'https://placehold.co/40x40/png'} 
+                                                alt={wishlistItem.item?.name ?? 'Wishlist item'} 
+                                                className="w-6 h-6 rounded object-cover flex-shrink-0" 
+                                              />
+                                              <div className="flex-grow min-w-0">
+                                                                                            <div className="text-sm font-medium text-orange-800 truncate" title={wishlistItem.item?.description || wishlistItem.item?.name || ''}>
+                                              {wishlistItem.item?.name ?? 'Unknown Item'} 
+                                            </div>
+                                            <div className="text-xs text-orange-600">
+                                              Requested: {wishlistItem.quantity} • Available: {wishlistItem.item?.available_quantity || 0}
+                                            </div>
+                                              </div>
+                                            </div>
+                                            
+                                            {/* Right side: Fulfill Button (Conditional) */}
+                                            {canFulfill && (
+                                              <button
+                                                                                            onClick={() => handleFulfillWishlistItem(
+                                              wishlistItem.wishlist_request_id,
+                                              order.id,
+                                              order.user_email, 
+                                              order.user_name,
+                                              wishlistItem.item?.name ?? 'Unknown Item',
+                                              effectiveQuantity
+                                            )}
+                                                disabled={processingOrders.has(order.id)} // Disable if order is processing
+                                                className="px-2 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700 transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                                              >
+                                                {processingOrders.has(order.id) ? '...' : 'Fulfill'}
+                                              </button>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                  </div>
+                                )}
+                                
+                                {/* Show message if no items at all */}
+                                {(() => {
+                                  const hasCheckedOutItems = Array.isArray(order.items) && order.items.length > 0;
+                                  const hasWishlistItems = Array.isArray(order.associatedWishlistItems) && order.associatedWishlistItems.length > 0;
+                                  
+
+                                  
+                                  return !hasCheckedOutItems && !hasWishlistItems;
+                                })() && (
+                                  <div className="text-sm text-gray-500 italic">No items</div>
+                                )}
+                              </div>
                             </td>
                             <td className="px-6 py-4 whitespace-nowrap">
                               <div className="text-sm text-[#58595B]">
@@ -867,7 +922,7 @@ function AdminDashboard() {
                         ))
                       ) : (
                         <tr>
-                          <td colSpan={6} className="px-6 py-12 text-center text-gray-500">
+                          <td colSpan={5} className="px-6 py-12 text-center text-gray-500">
                             {!loading && !error ? 'No orders found.' : ''}
                           </td>
                         </tr>
@@ -969,6 +1024,23 @@ function AdminDashboard() {
                     rows={3}
                     className="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-[#2c3e50] focus:ring-[#2c3e50]"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-[#58595B]">Category</label>
+                  <select
+                    value={editingItem.category || 'Misc'}
+                    onChange={(e) => setEditingItem({ ...editingItem, category: e.target.value as any })}
+                    className="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-[#2c3e50] focus:ring-[#2c3e50]"
+                  >
+                    <option value="Tents">Tents</option>
+                    <option value="Tables">Tables</option>
+                    <option value="Linens">Linens</option>
+                    <option value="Displays">Displays</option>
+                    <option value="Decor">Decor</option>
+                    <option value="Games">Games</option>
+                    <option value="Misc">Miscellaneous</option>
+                  </select>
                 </div>
 
                 <div>

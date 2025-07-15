@@ -86,14 +86,14 @@ serve(async (req) => {
     // Fetch the specific email template
     const { data: settingsData, error: settingsError } = await supabaseAdmin
       .from('email_settings')
-      .select('subject_template, body_template')
-      .eq('setting_name', 'wishlist_available_notification') // Use the new setting name
+      .select('subject, body_html')
+      .eq('template_id', 'wishlist_available_notification') // Use the correct column name
       .single()
 
     if (settingsError || !settingsData) {
       throw new Error(`Could not load email settings for wishlist_available_notification: ${settingsError?.message}`);
     }
-    const { subject_template: subjectTemplate, body_template: bodyTemplate } = settingsData;
+    const { subject: subjectTemplate, body_html: bodyTemplate } = settingsData;
     if (!subjectTemplate || !bodyTemplate) {
       throw new Error('Missing subject or body template in settings.');
     }
