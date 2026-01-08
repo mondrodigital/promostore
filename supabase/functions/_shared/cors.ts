@@ -2,7 +2,8 @@
 
 // Define allowed origins
 const allowedOrigins = [
-  'http://localhost:5173', // Local dev (adjust port if needed)
+  'http://localhost:5173', // Local dev - main app
+  'http://localhost:5174', // Local dev - admin dashboard
   'https://eventitemstore.vercel.app', // Production frontend URL
   // Add any other origins that need access
 ];

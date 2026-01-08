@@ -1,16 +1,25 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '../lib/supabase';
-import { Package2, ShoppingCart, X } from 'lucide-react';
+import { Package2, X } from 'lucide-react';
 import { useCart } from '../context/CartContext';
-import type { PromoItem } from '../types';
+import { useGuestUser } from '../context/GuestUserContext';
+import { useToast } from '../context/ToastContext';
+import type { PromoItem, CartItem } from '../types';
 import "react-datepicker/dist/react-datepicker.css";
 import ItemCalendar from '../components/ItemCalendar';
-import Navbar from '../components/Navbar';
-import TopBookingBar from '../components/TopBookingBar';
+import SimpleNavbar from '../components/SimpleNavbar';
+import BottomRequestBar from '../components/BottomRequestBar';
 import ItemFilterBar from '../components/ItemFilterBar';
-import { format } from 'date-fns';
+import {
+  validateCartAvailability,
+  createOrder,
+  createCheckoutRecords,
+  saveWishlistItems,
+  sendOrderNotifications,
+  sendPowerAutomateWebhook,
+  type OrderFormData
+} from '../services/orderService';
 
-// Define Category type (can be moved to types.ts later)
 type Category = 'All' | 'Tents' | 'Tables' | 'Linens' | 'Displays' | 'Decor' | 'Games' | 'Misc';
 
 
@@ -20,8 +29,8 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isScrolled, setIsScrolled] = useState(false);
-  const [isSearchExpanded, setIsSearchExpanded] = useState(false);
+  const { guestEmail, setGuestEmail } = useGuestUser();
+  const { showSuccess, showError, showWarning, showInfo } = useToast();
   const { 
     items: cartItems, 
     addToCart, 
@@ -54,16 +63,15 @@ export default function HomePage() {
       setLoading(true);
       setError(null);
       
-      const { data, error } = await supabase
+      const { data, error: fetchError } = await supabase
         .from('promo_items')
         .select('*')
         .order('name');
 
-      if (error) throw error;
+      if (fetchError) throw fetchError;
 
       setItems(data || []);
     } catch (err: any) {
-      console.error('Error fetching items:', err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -78,208 +86,152 @@ export default function HomePage() {
     fetchItems();
   }, []);
 
+  // Auto-fill email from cached guest email
   useEffect(() => {
-    const handleScroll = () => {
-      if (window.scrollY > 10) {
-        setIsScrolled(true);
-      } else {
-        setIsScrolled(false);
-        setIsSearchExpanded(false);
-      }
-    };
-
-    window.addEventListener('scroll', handleScroll);
-
-    return () => {
-      window.removeEventListener('scroll', handleScroll);
-    };
-  }, []);
-
-  const toggleSearchExpand = () => {
-    setIsSearchExpanded(prev => !prev);
-  };
+    if (guestEmail && !formData.email) {
+      setFormData(prev => ({
+        ...prev,
+        email: guestEmail,
+      }));
+    }
+  }, [guestEmail]);
 
   const handleSubmit = async () => {
-    
-    // Ensure required form data is present (dates, name, email)
+    // Validate required form data
     if (!formData.name || !formData.email || !formData.pickupDate || !formData.returnDate || !formData.eventStartDate || !formData.eventEndDate) {
-      setError('Please fill in all required fields in the top bar');
+      showError('Please fill in all required fields');
       return;
     }
-     if (!validateEmail(formData.email)) {
-      setError('Please use your @vellummortgage.com email address');
+    
+    if (!validateEmail(formData.email)) {
+      showError('Please use your @vellummortgage.com email address');
       return;
     }
 
-    // Check if there's anything to submit (cart or wishlist)
     if (cartItems.length === 0 && wishlistItems.length === 0) {
-      setError('Please add items to your cart or wishlist before submitting');
+      showError('Please add items to your cart or wishlist before submitting');
       return;
     }
 
     setIsSubmitting(true);
     setError(null);
-    let orderSuccessful = false;
-    let orderId: string | null = null;
-    let wishlistSaved = false;
 
     try {
-      // --- 1. Create Order (for cart items OR wishlist-only requests) ---
+      // Validate cart availability before proceeding
       if (cartItems.length > 0) {
-        // Normal order with cart items
-        const orderItemsPayload = cartItems.map(item => ({
-          item_id: item.id,
-          quantity: item.requestedQuantity
-        }));
-
-        const { data, error: submitError } = await supabase.rpc(
-          'create_order_with_checkouts',
-          {
-            p_checkout_date: formData.pickupDate.toISOString().split('T')[0],
-            p_items: orderItemsPayload,
-            p_return_date: formData.returnDate.toISOString().split('T')[0],
-            p_user_email: formData.email,
-            p_user_name: formData.name
-          }
-        );
-
-        if (submitError) throw new Error(`Order submission failed: ${submitError.message}`);
+        const validation = await validateCartAvailability(cartItems);
         
+        if (!validation.isValid) {
+          // Handle unavailable items
+          if (validation.unavailableItems.length > 0) {
+            const itemNames = validation.unavailableItems.map(i => i.name).join(', ');
+            showWarning(`Some items are no longer available: ${itemNames}. They have been moved to your wishlist.`);
+            
+            // Move unavailable items to wishlist
+            validation.unavailableItems.forEach(item => {
+              removeFromCart(String(item.id));
+              addToWishlist(item, item.requestedQuantity);
+            });
+          }
+          
+          // Handle items with reduced availability
+          if (validation.staleItems.length > 0) {
+            const staleInfo = validation.staleItems
+              .map(s => `${s.item.name} (only ${s.currentAvailable} available)`)
+              .join(', ');
+            showWarning(`Quantities adjusted for: ${staleInfo}`);
+            
+            // Adjust quantities in cart
+            validation.staleItems.forEach(staleItem => {
+              if (staleItem.currentAvailable > 0) {
+                // Update cart with available quantity
+                removeFromCart(String(staleItem.item.id));
+                addToCart(staleItem.item as PromoItem, staleItem.currentAvailable);
+                // Add remainder to wishlist
+                const remainder = staleItem.requestedQuantity - staleItem.currentAvailable;
+                if (remainder > 0) {
+                  addToWishlist(staleItem.item as PromoItem, remainder);
+                }
+              } else {
+                // Move entire item to wishlist
+                removeFromCart(String(staleItem.item.id));
+                addToWishlist(staleItem.item as PromoItem, staleItem.requestedQuantity);
+              }
+            });
+          }
+          
+          // Re-check if we still have cart items after adjustments
+          if (cartItems.length === 0 && wishlistItems.length === 0) {
+            showError('No items available for checkout. Please try again later.');
+            setIsSubmitting(false);
+            return;
+          }
+          
+          // Let user review the adjusted cart before submitting
+          showInfo('Cart has been adjusted. Please review and submit again.');
+          setIsSubmitting(false);
+          return;
+        }
+      }
+
+      const orderFormData: OrderFormData = formData;
+      let orderId: string | null = null;
+      let orderNumber: string | null = null;
+      let orderSuccessful = false;
+      let wishlistSaved = false;
+
+      // Create order
+      if (cartItems.length > 0) {
+        const orderResult = await createOrder(orderFormData, 'pending');
+        orderId = orderResult.orderId;
+        orderNumber = orderResult.orderNumber;
+        
+        await createCheckoutRecords(orderId, cartItems);
         orderSuccessful = true;
-        orderId = data?.order_id || null;
-        
       } else if (wishlistItems.length > 0) {
-        // Wishlist-only: Create a placeholder order for tracking
-        const { data, error: wishlistOrderError } = await supabase
-          .from('orders')
-          .insert([{
-            user_name: formData.name,
-            user_email: formData.email,
-            checkout_date: formData.pickupDate.toISOString().split('T')[0],
-            return_date: formData.returnDate.toISOString().split('T')[0],
-            status: 'wishlist_only' // Special status for wishlist-only orders
-          }])
-          .select('id')
-          .single();
-
-        if (wishlistOrderError) throw new Error(`Wishlist order creation failed: ${wishlistOrderError.message}`);
-        
-        orderId = data?.id || null;
-        console.log("Created wishlist-only order with ID:", orderId);
+        const orderResult = await createOrder(orderFormData, 'wishlist_only');
+        orderId = orderResult.orderId;
+        orderNumber = orderResult.orderNumber;
       }
 
-      // --- 2. Handle Wishlist Items (Save Request) ---
+      // Save wishlist items
       if (wishlistItems.length > 0 && orderId) {
-         const wishlistRequestsPayload = wishlistItems.map(item => ({
-            order_id: orderId,
-            user_name: formData.name,
-            user_email: formData.email,
-            item_id: item.id,
-            requested_quantity: item.requestedQuantity,
-            requested_pickup_date: formData.pickupDate!.toISOString().split('T')[0],
-            requested_return_date: formData.returnDate!.toISOString().split('T')[0],
-            event_start_date: formData.eventStartDate!.toISOString().split('T')[0],
-            event_end_date: formData.eventEndDate!.toISOString().split('T')[0],
-            status: 'pending' // Initial status
-         }));
-
-         console.log("Saving wishlist requests:", wishlistRequestsPayload);
-         
-         const { data: wishlistData, error: wishlistError } = await supabase.rpc(
-           'add_wishlist_requests', 
-           { requests: wishlistRequestsPayload }
-         );
-         if (wishlistError) {
-            console.error("Error saving wishlist requests:", wishlistError);
-            console.error("Wishlist payload that failed:", wishlistRequestsPayload);
-            throw new Error(`Failed to save wishlist request: ${wishlistError.message}`);
-         }
-         console.log("Successfully saved wishlist requests:", wishlistData);
-         wishlistSaved = true;
-      }
-      
-      // --- 3. Send Combined Notifications (if cart order OR wishlist saved) ---
-       if (orderSuccessful || wishlistSaved) {
-            try {
-                const notificationPayload = {
-                    orderId: orderId, // Will be null if only wishlist
-                    customerName: formData.name,
-                    customerEmail: formData.email,
-                    pickupDate: formData.pickupDate?.toLocaleDateString(),
-                    returnDate: formData.returnDate?.toLocaleDateString(),
-                    eventStartDate: formData.eventStartDate?.toLocaleDateString(),
-                    eventEndDate: formData.eventEndDate?.toLocaleDateString(),
-                    // Include BOTH lists in the payload
-                    checkedOutItems: cartItems.map(item => ({ name: item.name, quantity: item.requestedQuantity })),
-                    wishlistItems: wishlistItems.map(item => ({ name: item.name, quantity: item.requestedQuantity }))
-                };
-
-                console.log("Sending combined notification payload:", notificationPayload);
-
-                 // Call existing functions - they need to be updated to handle the lists
-                 // TODO: Ensure these functions are updated on the backend
-                 await supabase.functions.invoke('send-order-notification', { body: notificationPayload });
-                 await supabase.functions.invoke('send-user-confirmation', { body: notificationPayload });
-
-                 // Calendar links are now embedded directly in the email templates
-
-            } catch (invokeError) {
-                console.error('Failed to invoke combined notification functions:', invokeError);
-                // Decide if this should block success message? Probably not.
-            }
-       }
-
-      // --- 4. Send to Power Automate (only for actual orders) ---
-      if (orderSuccessful && orderId) {
-          try {
-              const powerAutomatePayload = {
-                  orderId: orderId,
-                  customerName: formData.name,
-                  customerEmail: formData.email,
-                  pickupDate: formData.pickupDate?.toISOString().split('T')[0], // YYYY-MM-DD format
-                  returnDate: formData.returnDate?.toISOString().split('T')[0],
-                  eventStartDate: formData.eventStartDate?.toISOString().split('T')[0],
-                  eventEndDate: formData.eventEndDate?.toISOString().split('T')[0]
-              };
-
-              console.log('Sending to Power Automate:', powerAutomatePayload);
-              
-              await supabase.functions.invoke('send-power-automate-webhook', { 
-                  body: powerAutomatePayload 
-              });
-              
-              console.log('Power Automate webhook sent successfully');
-          } catch (webhookError) {
-              console.error('Power Automate webhook failed:', webhookError);
-              // Don't block the order success - this is just for calendar automation
-          }
+        await saveWishlistItems(orderId, wishlistItems, orderFormData);
+        wishlistSaved = true;
       }
 
+      // Send notifications
+      if ((orderSuccessful || wishlistSaved) && orderId) {
+        await sendOrderNotifications(orderId, orderNumber, orderFormData, cartItems, wishlistItems);
+        
+        if (orderSuccessful) {
+          await sendPowerAutomateWebhook(orderId, orderNumber, orderFormData);
+        }
+      }
 
-      // --- 4. Cleanup and Success ---
+      // Cache guest email
+      if (guestEmail !== formData.email) {
+        setGuestEmail(formData.email);
+      }
+
+      // Reset form and cart
       setFormData({ name: '', email: '', pickupDate: null, returnDate: null, eventStartDate: null, eventEndDate: null });
       clearCart();
-      clearWishlist(); 
-      
-      await fetchItems(); // Refresh item availability
-      
-      // Construct success message
-      let successMessage = "";
+      clearWishlist();
+      await fetchItems();
+
+      // Show success message
       if (orderSuccessful && wishlistSaved) {
-          successMessage = "Order submitted and wishlist request saved! Check your email for confirmation and calendar invites.";
+        showSuccess('Order submitted and wishlist request saved! Check your email for confirmation.');
       } else if (orderSuccessful) {
-          successMessage = "Order submitted successfully! Check your email for confirmation and calendar invites for pickup/return.";
+        showSuccess('Order submitted successfully! Check your email for confirmation and calendar invites.');
       } else if (wishlistSaved) {
-          successMessage = "Your wishlist request has been submitted! See email for details.";
-      } else {
-          // This case shouldn't be reached if initial check passes, but as fallback:
-          successMessage = "Request processed."; 
+        showSuccess('Wishlist request submitted! We\'ll notify you when items become available.');
       }
-      alert(successMessage); 
 
     } catch (err: any) {
-      console.error('Error during submission process:', err); // Log the actual error
-      setError(err.message || 'Failed to process request');
+      console.error('Order submission error:', err);
+      showError(err.message || 'Failed to process request. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -318,19 +270,52 @@ export default function HomePage() {
     sessionStorage.setItem('infoBannerDismissed', 'true');
   };
 
-  // Calculate sticky top offset for filter bar
-  const navHeight = '5rem'; // From Navbar h-20
-  const bookingBarApproxHeight = '76px'; // From TopBookingBar calculation used elsewhere
-  const showFullBookingBar = !isScrolled || isSearchExpanded;
-  const stickyTopOffset = showFullBookingBar ? `calc(${navHeight} + ${bookingBarApproxHeight})` : navHeight;
+  // Handle reordering items from order history
+  const handleReorderItems = async (reorderItems: Array<{ id: string; quantity: number }>) => {
+    try {
+      const { data: currentItems, error: itemsError } = await supabase
+        .from('promo_items')
+        .select('*')
+        .in('id', reorderItems.map(item => item.id));
 
-  // Define wrapper function for prop drilling consistency
-  const handleRemoveFromCart = (itemId: string) => {
-      removeFromCart(itemId);
-  };
-  
-  const handleRemoveFromWishlist = (itemId: string) => {
-      removeFromWishlist(itemId);
+      if (itemsError) throw itemsError;
+
+      let addedToCart = 0;
+      let addedToWishlist = 0;
+
+      reorderItems.forEach(reorderItem => {
+        const itemData = currentItems?.find(item => item.id === reorderItem.id);
+        if (itemData) {
+          const availableQuantity = itemData.available_quantity;
+          const requestedQuantity = reorderItem.quantity;
+          
+          if (availableQuantity > 0) {
+            const quantityToAdd = Math.min(requestedQuantity, availableQuantity);
+            addToCart(itemData, quantityToAdd);
+            addedToCart++;
+            
+            // Add remainder to wishlist if needed
+            if (requestedQuantity > availableQuantity) {
+              addToWishlist(itemData, requestedQuantity - availableQuantity);
+              addedToWishlist++;
+            }
+          } else {
+            addToWishlist(itemData, requestedQuantity);
+            addedToWishlist++;
+          }
+        }
+      });
+
+      if (addedToCart > 0 && addedToWishlist > 0) {
+        showInfo(`${addedToCart} item(s) added to cart, ${addedToWishlist} to wishlist (limited availability).`);
+      } else if (addedToCart > 0) {
+        showSuccess('Items added to your cart! Review and submit when ready.');
+      } else if (addedToWishlist > 0) {
+        showWarning('Items are currently unavailable and have been added to your wishlist.');
+      }
+    } catch (err) {
+      showError('Failed to add items. Please try again.');
+    }
   };
 
   if (loading) {
@@ -342,58 +327,18 @@ export default function HomePage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Navbar 
-        formData={formData}
-        onFormDataChange={handleFormDataChange} 
-        onEventDateChange={handleEventDateChange}
-        onPickupReturnDateChange={handlePickupReturnDateChange}
-        onSubmit={handleSubmit}
-        isSubmitting={isSubmitting}
-        isScrolled={isScrolled}
-        isSearchExpanded={isSearchExpanded}
-        onToggleSearchExpand={toggleSearchExpand}
-        eventDateText={
-          formData.eventStartDate
-            ? `${format(formData.eventStartDate, 'MMM d')} ${formData.eventEndDate ? `- ${format(formData.eventEndDate, 'MMM d')}` : ''}` 
-            : 'Event Dates'
-        }
-        pickupReturnDateText={
-           formData.pickupDate
-            ? `${format(formData.pickupDate, 'MMM d')} ${formData.returnDate ? `- ${format(formData.returnDate, 'MMM d')}` : ''}`
-            : 'Pickup & Return'
-        }
-        cartItems={cartItems}
-        removeFromCart={handleRemoveFromCart}
-        clearCart={clearCart}
-        getTotalQuantity={getTotalQuantity}
-        wishlistItems={wishlistItems}
-        removeFromWishlist={handleRemoveFromWishlist}
-      />
+    <div className="min-h-screen bg-gray-50 pb-32">
+      <SimpleNavbar />
       
-      {isScrolled && isSearchExpanded && (
-        <div 
-          className="fixed inset-0 bg-black bg-opacity-40 z-10" 
-          onClick={() => setIsSearchExpanded(false)}
-        ></div>
-      )}
-      
-      <div className={`flex-1 transition-all duration-300 ${isScrolled && isSearchExpanded ? 'filter blur-sm' : ''} ${(!isScrolled || isSearchExpanded) ? 'pt-[calc(5rem+76px+2rem)]' : 'pt-[calc(5rem+2rem)]'}`}>
-        <div 
-          className={`sticky z-20 transition-colors duration-200 ${ 
-            isScrolled ? 'bg-white shadow-sm' : 'bg-transparent'
-          }`}
-          style={{ top: stickyTopOffset }}
-        >
-          <div className="max-w-7xl mx-auto">
-             <ItemFilterBar 
-                activeFilter={activeFilter} 
-                onFilterChange={handleFilterChange} 
-             />
+      <div className="pt-20 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-7xl mx-auto">
+          <div className="sticky top-16 z-20 bg-gray-50 py-4">
+            <ItemFilterBar 
+              activeFilter={activeFilter} 
+              onFilterChange={handleFilterChange} 
+            />
           </div>
-        </div>
         
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-6">
           {isBannerVisible && (
             <div className="relative bg-gradient-to-r from-[rgb(0,54,86)] to-[rgb(0,117,174)] text-white rounded-xl p-4 mb-6">
               <button 
@@ -476,21 +421,34 @@ export default function HomePage() {
                           disabled={!isOutOfStock && cartQuantity >= item.available_quantity}
                           onClick={() => {
                             const input = document.getElementById(`quantity-${item.id}`) as HTMLInputElement;
-                            const quantity = parseInt(input.value); 
-                            if (quantity > 0) {
-                              if (isOutOfStock) {
-                                addToWishlist(item, quantity);
-                                alert(`${quantity} x ${item.name} added to wishlist.`);
+                            const quantity = parseInt(input.value) || 1;
+                            
+                            if (quantity <= 0) {
+                              showError('Please enter a valid quantity');
+                              return;
+                            }
+                            
+                            if (isOutOfStock) {
+                              addToWishlist(item, quantity);
+                              showInfo(`${item.name} added to wishlist`);
+                            } else {
+                              const currentInCart = getItemQuantity(String(item.id));
+                              const totalRequested = currentInCart + quantity;
+                              
+                              if (totalRequested <= item.available_quantity) {
+                                addToCart(item, quantity);
+                                showSuccess(`${item.name} added to cart`);
                               } else {
-                                if (quantity <= item.available_quantity) {
-                                  addToCart(item, quantity);
+                                const maxAddable = item.available_quantity - currentInCart;
+                                if (maxAddable > 0) {
+                                  showWarning(`Only ${maxAddable} more available. Adjusted quantity.`);
+                                  addToCart(item, maxAddable);
                                 } else {
-                                  alert(`Cannot add ${quantity} - only ${item.available_quantity} available.`);
-                                  input.value = item.available_quantity.toString();
+                                  showWarning(`Maximum quantity already in cart`);
                                 }
                               }
-                              input.value = "1";
                             }
+                            input.value = "1";
                           }}
                         >
                           {isOutOfStock ? 'Add to Wishlist' : (cartQuantity >= item.available_quantity ? 'Max in Cart' : 'Add to Cart')}
@@ -508,16 +466,37 @@ export default function HomePage() {
           </div>
 
           {error && (
-              <div className="fixed bottom-5 right-5 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded shadow-lg z-50" role="alert">
-                <strong className="font-bold">Error!</strong>
-                <span className="block sm:inline"> {error}</span>
-                <span className="absolute top-0 bottom-0 right-0 px-4 py-3" onClick={() => setError(null)}>
-                  <X className="fill-current h-6 w-6 text-red-500" />
-                </span>
-              </div>
-            )}
+            <div className="fixed bottom-24 right-5 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded shadow-lg z-50" role="alert">
+              <strong className="font-bold">Error!</strong>
+              <span className="block sm:inline"> {error}</span>
+              <button 
+                className="absolute top-0 bottom-0 right-0 px-4 py-3" 
+                onClick={() => setError(null)}
+                aria-label="Close error"
+              >
+                <X className="h-6 w-6 text-red-500" />
+              </button>
+            </div>
+          )}
         </div>
       </div>
+
+      {/* Bottom Request Bar */}
+      <BottomRequestBar
+        formData={formData}
+        onFormDataChange={handleFormDataChange}
+        onEventDateChange={handleEventDateChange}
+        onPickupReturnDateChange={handlePickupReturnDateChange}
+        onSubmit={handleSubmit}
+        isSubmitting={isSubmitting}
+        cartItems={cartItems}
+        removeFromCart={removeFromCart}
+        clearCart={clearCart}
+        getTotalQuantity={getTotalQuantity}
+        wishlistItems={wishlistItems}
+        removeFromWishlist={removeFromWishlist}
+        onReorderItems={handleReorderItems}
+      />
     </div>
   );
 }

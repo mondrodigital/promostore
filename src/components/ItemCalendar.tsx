@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight } from 'lucide-react';
-import { format, parseISO, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, isSameDay, addMonths, subMonths } from 'date-fns';
+import { format, parseISO, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, addMonths, subMonths } from 'date-fns';
 import { supabase } from '../lib/supabase';
 
 interface ItemSchedule {
@@ -15,7 +15,7 @@ interface ItemSchedule {
 }
 
 interface ItemCalendarProps {
-  itemId: number;
+  itemId: string;
   itemName: string;
 }
 

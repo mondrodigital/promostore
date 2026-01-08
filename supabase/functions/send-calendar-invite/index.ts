@@ -6,7 +6,8 @@ const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')
 
 // Define CORS headers 
 const allowedOrigins = [
-  'http://localhost:5173', // Local dev
+  'http://localhost:5173', // Local dev - main app
+  'http://localhost:5174', // Local dev - admin dashboard
   'https://eventitemstore.vercel.app', // Production
 ];
 const corsHeaders = (origin: string | null) => ({
@@ -21,19 +22,25 @@ const corsHeaders = (origin: string | null) => ({
 function generateICSContent({
   eventName,
   description,
-  startTime,
-  endTime,
+  eventDate,
   location,
   attendees,
 }: {
   eventName: string;
   description: string;
-  startTime: Date;
-  endTime: Date;
+  eventDate: Date;
   location: string;
   attendees: string[];
 }) {
-  const formatDate = (date: Date) => {
+  const formatDateForAllDay = (date: Date) => {
+    // Format as YYYYMMDD for all-day events
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}${month}${day}`;
+  };
+
+  const formatDateTimeStamp = (date: Date) => {
     return date.toISOString().replace(/-|:|\.\d+/g, '');
   };
 
@@ -44,15 +51,16 @@ function generateICSContent({
     'CALSCALE:GREGORIAN',
     'METHOD:REQUEST',
     'BEGIN:VEVENT',
-    `DTSTART:${formatDate(startTime)}`,
-    `DTEND:${formatDate(endTime)}`,
+    `DTSTART;VALUE=DATE:${formatDateForAllDay(eventDate)}`,
+    `DTEND;VALUE=DATE:${formatDateForAllDay(new Date(eventDate.getTime() + 24 * 60 * 60 * 1000))}`, // Next day for all-day event
     `SUMMARY:${eventName}`,
     `DESCRIPTION:${description}`,
     `LOCATION:${location}`,
+    'TRANSP:TRANSPARENT', // Mark as free time
     ...attendees.map(email => `ATTENDEE;RSVP=TRUE;ROLE=REQ-PARTICIPANT:mailto:${email}`),
     'STATUS:CONFIRMED',
     'SEQUENCE:0',
-    'DTSTAMP:' + formatDate(new Date()),
+    'DTSTAMP:' + formatDateTimeStamp(new Date()),
     'END:VEVENT',
     'END:VCALENDAR'
   ].join('\r\n');
@@ -91,8 +99,7 @@ serve(async (req) => {
     console.log('Received body for calendar invite:', eventData);
     if (!eventData.customerEmail) throw new Error("Missing customerEmail.");
     if (!eventData.eventType) throw new Error("Missing eventType.");
-    if (!eventData.startTime) throw new Error("Missing startTime.");
-    if (!eventData.endTime) throw new Error("Missing endTime.");
+    if (!eventData.eventDate) throw new Error("Missing eventDate."); // Changed from startTime/endTime to eventDate
   } catch (error) {
     console.error('Error parsing request body:', error)
     return new Response(JSON.stringify({ message: `Bad Request: ${error.message}` }), { status: 400, headers: baseHeaders })
@@ -105,14 +112,13 @@ serve(async (req) => {
       : `Equipment Return - Order #${eventData.orderId}`;
 
     const description = eventData.eventType === 'pickup'
-      ? `Please arrive at the specified time to pick up your equipment for order #${eventData.orderId}.`
-      : `Please return your equipment for order #${eventData.orderId} at the specified time.`;
+      ? `Please arrive during business hours to pick up your equipment for order #${eventData.orderId}.`
+      : `Please return your equipment for order #${eventData.orderId} during business hours.`;
 
     const icsContent = generateICSContent({
       eventName,
       description,
-      startTime: new Date(eventData.startTime),
-      endTime: new Date(eventData.endTime),
+      eventDate: new Date(eventData.eventDate),
       location: eventData.location || 'Vellum Marketing Office',
       attendees: [eventData.customerEmail, ...(eventData.additionalAttendees || [])],
     });
@@ -124,11 +130,12 @@ serve(async (req) => {
       subject: eventName,
       html: `
         <p>Dear ${eventData.customerName || 'Valued Customer'},</p>
-        <p>Please find attached the calendar invite for your ${eventData.eventType === 'pickup' ? 'equipment pickup' : 'equipment return'}.</p>
+        <p>Please find attached the calendar reminder for your ${eventData.eventType === 'pickup' ? 'equipment pickup' : 'equipment return'}.</p>
         <p>Order ID: ${eventData.orderId}</p>
-        <p>Date: ${new Date(eventData.startTime).toLocaleDateString()}</p>
-        <p>Time: ${new Date(eventData.startTime).toLocaleTimeString()} - ${new Date(eventData.endTime).toLocaleTimeString()}</p>
+        <p>Date: ${new Date(eventData.eventDate).toLocaleDateString()}</p>
+        <p>Time: During business hours (9 AM - 5 PM)</p>
         <p>Location: ${eventData.location || 'Vellum Marketing Office'}</p>
+        <p>This reminder has been added to your calendar as a free/transparent event, so it won't block your schedule.</p>
         <p>Best regards,<br>The Events Team</p>
       `,
       attachments: [{

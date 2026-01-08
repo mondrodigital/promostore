@@ -6,7 +6,8 @@ const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')
 
 // Define CORS headers
 const allowedOrigins = [
-  'http://localhost:5173', // Local dev
+  'http://localhost:5173', // Local dev - main app
+  'http://localhost:5174', // Local dev - admin dashboard
   'https://eventitemstore.vercel.app', // Production
   // Add any other origins if needed
 ];

@@ -1,5 +1,5 @@
 export interface PromoItem {
-  id: number;
+  id: string;
   created_at: string;
   name: string;
   description: string | null;
@@ -10,13 +10,13 @@ export interface PromoItem {
 }
 
 export interface Checkout {
-  id: number;
+  id: string;
   created_at: string;
-  item_id: number;
+  item_id: string;
   checkout_date: string;
   return_date: string;
   quantity: number;
-  order_id: number;
+  order_id: string;
 }
 
 export interface User {

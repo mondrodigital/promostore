@@ -132,7 +132,7 @@ export default function EmailSettings() {
   };
 
   if (loading) {
-    return <div className="text-center p-8">Loading email settings...</div>;
+    return <div className="text-center p-8 text-gray-900">Loading email settings...</div>;
   }
 
   if (error) {
@@ -150,9 +150,9 @@ export default function EmailSettings() {
         }`}
         onClick={() => setExpanded(expanded === setting.template_id ? null : setting.template_id)}
       >
-        <span>{setting.description || setting.template_id}</span>
+        <span className="text-gray-900 font-medium">{setting.description || setting.template_id}</span>
         <ChevronDown
-          className={`ml-2 h-5 w-5 transition-transform ${expanded === setting.template_id ? 'rotate-180' : ''}`}
+          className={`ml-2 h-5 w-5 text-gray-600 transition-transform ${expanded === setting.template_id ? 'rotate-180' : ''}`}
         />
       </button>
       {expanded === setting.template_id && (
@@ -280,11 +280,11 @@ export default function EmailSettings() {
   return (
     <div className="space-y-8">
       <div>
-        <h2 className="text-lg font-bold mb-2">External Notifications</h2>
+        <h2 className="text-lg font-bold mb-2 text-gray-900">External Notifications</h2>
         {external.map(renderTemplate)}
       </div>
       <div>
-        <h2 className="text-lg font-bold mb-2">Internal Notifications</h2>
+        <h2 className="text-lg font-bold mb-2 text-gray-900">Internal Notifications</h2>
         {internal.map(renderTemplate)}
       </div>
     </div>

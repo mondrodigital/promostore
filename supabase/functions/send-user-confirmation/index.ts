@@ -6,7 +6,8 @@ const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')
 
 // Define CORS headers (same as the other function)
 const allowedOrigins = [
-  'http://localhost:5173', // Local dev
+  'http://localhost:5173', // Local dev - main app
+  'http://localhost:5174', // Local dev - admin dashboard
   'https://eventitemstore.vercel.app', // Production
   // Add any other origins if needed
 ];
@@ -28,25 +29,32 @@ function generateCalendarButtonsHtml(event: {
 }): string {
   const { title, description, startDate, endDate, location } = event;
   
-  // Format dates for calendar providers
-  const formatDateForGoogle = (date: Date) => {
-    return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+  // Format dates for all-day events
+  const formatDateForAllDay = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}${month}${day}`;
   };
+
+  // For all-day events, we need the end date to be the next day
+  const allDayEndDate = new Date(startDate);
+  allDayEndDate.setDate(allDayEndDate.getDate() + 1);
 
   // Encode text for URLs
   const encodeText = (text: string) => encodeURIComponent(text);
 
-  // Generate URLs
-  const googleUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeText(title)}&dates=${formatDateForGoogle(startDate)}/${formatDateForGoogle(endDate)}&details=${encodeText(description)}&location=${encodeText(location)}&sf=true&output=xml`;
+  // Generate URLs for all-day events
+  const googleUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeText(title)}&dates=${formatDateForAllDay(startDate)}/${formatDateForAllDay(allDayEndDate)}&details=${encodeText(description + ' (Free/transparent reminder - won\'t block your calendar)')}&location=${encodeText(location)}&sf=true&output=xml`;
   
-  const outlookUrl = `https://outlook.live.com/calendar/0/deeplink/compose?subject=${encodeText(title)}&startdt=${formatDateForGoogle(startDate)}&enddt=${formatDateForGoogle(endDate)}&body=${encodeText(description)}&location=${encodeText(location)}`;
+  const outlookUrl = `https://outlook.live.com/calendar/0/deeplink/compose?subject=${encodeText(title)}&startdt=${formatDateForAllDay(startDate)}&enddt=${formatDateForAllDay(allDayEndDate)}&allday=true&body=${encodeText(description + ' (Free/transparent reminder - won\'t block your calendar)')}&location=${encodeText(location)}`;
   
-  const outlook365Url = `https://outlook.office.com/calendar/0/deeplink/compose?subject=${encodeText(title)}&startdt=${formatDateForGoogle(startDate)}&enddt=${formatDateForGoogle(endDate)}&body=${encodeText(description)}&location=${encodeText(location)}`;
+  const outlook365Url = `https://outlook.office.com/calendar/0/deeplink/compose?subject=${encodeText(title)}&startdt=${formatDateForAllDay(startDate)}&enddt=${formatDateForAllDay(allDayEndDate)}&allday=true&body=${encodeText(description + ' (Free/transparent reminder - won\'t block your calendar)')}&location=${encodeText(location)}`;
   
   return `
     <div style="margin: 20px 0; padding: 15px; background-color: #f8f9fa; border-radius: 8px; border-left: 4px solid #0075AE;">
       <h3 style="margin: 0 0 10px 0; color: #333; font-size: 16px;">📅 ${title}</h3>
-      <p style="margin: 0 0 15px 0; color: #666; font-size: 14px;">Click to add this reminder to your calendar:</p>
+      <p style="margin: 0 0 15px 0; color: #666; font-size: 14px;">Click to add this reminder to your calendar as a free/transparent event:</p>
       <div style="display: flex; flex-wrap: wrap; gap: 10px;">
         <a href="${googleUrl}" target="_blank" style="display: inline-block; padding: 8px 16px; background-color: #4285f4; color: white; text-decoration: none; border-radius: 4px; font-size: 14px;">📅 Google Calendar</a>
         <a href="${outlookUrl}" target="_blank" style="display: inline-block; padding: 8px 16px; background-color: #0078d4; color: white; text-decoration: none; border-radius: 4px; font-size: 14px;">📅 Outlook</a>
@@ -190,31 +198,20 @@ serve(async (req) => {
       try {
         const pickupDate = new Date(requestPayload.pickupDate);
         const returnDate = new Date(requestPayload.returnDate);
-        
-        // Set default times (9-10 AM)
-        const pickupStart = new Date(pickupDate);
-        pickupStart.setHours(9, 0, 0, 0);
-        const pickupEnd = new Date(pickupDate);
-        pickupEnd.setHours(10, 0, 0, 0);
-        
-        const returnStart = new Date(returnDate);
-        returnStart.setHours(9, 0, 0, 0);
-        const returnEnd = new Date(returnDate);
-        returnEnd.setHours(10, 0, 0, 0);
 
         const pickupButtons = generateCalendarButtonsHtml({
           title: `Equipment Pickup - Order #${requestPayload.orderId}`,
-          description: `Pick up your equipment for order #${requestPayload.orderId}. Please arrive at the specified time.`,
-          startDate: pickupStart,
-          endDate: pickupEnd,
+          description: `Pick up your equipment for order #${requestPayload.orderId}. Please arrive during business hours (9 AM - 5 PM).`,
+          startDate: pickupDate,
+          endDate: pickupDate, // Same day for all-day event
           location: 'Vellum Marketing Office'
         });
 
         const returnButtons = generateCalendarButtonsHtml({
           title: `Equipment Return - Order #${requestPayload.orderId}`,
-          description: `Return your equipment for order #${requestPayload.orderId}. Please ensure all items are returned in good condition.`,
-          startDate: returnStart,
-          endDate: returnEnd,
+          description: `Return your equipment for order #${requestPayload.orderId}. Please ensure all items are returned in good condition during business hours (9 AM - 5 PM).`,
+          startDate: returnDate,
+          endDate: returnDate, // Same day for all-day event
           location: 'Vellum Marketing Office'
         });
 
