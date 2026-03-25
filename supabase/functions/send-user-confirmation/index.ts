@@ -267,7 +267,6 @@ serve(async (req) => {
 
     const { data, error } = await resend.emails.send({
       from: 'Vellum Event Items Store <events@vellummortgage.com>',
-      replyTo: 'marketing@vellummortgage.com',
       to: [requestPayload.customerEmail],
       subject: subject,
       html: bodyHtml,

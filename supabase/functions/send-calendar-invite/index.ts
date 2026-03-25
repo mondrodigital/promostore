@@ -126,7 +126,6 @@ serve(async (req) => {
     // Send email with calendar invite
     const { data, error } = await resend.emails.send({
       from: 'Vellum Orders <orders@updates.govellum.com>',
-      replyTo: 'marketing@vellummortgage.com',
       to: [eventData.customerEmail, ...(eventData.additionalAttendees || [])],
       subject: eventName,
       html: `
