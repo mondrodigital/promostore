@@ -24,65 +24,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // --- START: Real Supabase Auth --- 
-    const fetchSession = async () => {
-      try {
-        const { data: { session }, error } = await supabase.auth.getSession();
-        if (error) throw error;
-        
-        // Fetch user profile/metadata if session exists to check is_admin
-        if (session?.user) {
-          // Example: Check user metadata for is_admin flag
-          const isAdmin = session.user.user_metadata?.is_admin === true;
-          setUser({ ...session.user, is_admin: isAdmin }); 
-        } else {
-          setUser(null);
-        }
-      } catch (error) {
-        console.error("Error fetching session:", error);
-        setUser(null); // Ensure user is null on error
-      } finally {
-        setLoading(false);
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session?.user) {
+        const isAdmin = session.user.user_metadata?.is_admin === true;
+        setUser({ ...session.user, is_admin: isAdmin });
+      } else if (event === 'SIGNED_OUT') {
+        setUser(null);
       }
-    };
-
-    fetchSession();
-
-    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
-      console.log("Auth state changed:", _event, session);
-      // Fetch profile/metadata again on sign-in/sign-out
-       if (session?.user) {
-          const isAdmin = session.user.user_metadata?.is_admin === true;
-          setUser({ ...session.user, is_admin: isAdmin }); 
-        } else {
-          setUser(null);
-        }
-        setLoading(false); // Ensure loading is false after auth state change
+      setLoading(false);
     });
-    // --- END: Real Supabase Auth ---
 
     return () => {
       authListener?.subscription?.unsubscribe();
     };
   }, []);
 
-  // Real signIn function
   async function signIn(email: string, password: string) {
-     setLoading(true);
      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-     setLoading(false);
-     // Note: onAuthStateChange should handle setting the user state
-     if (error) console.error("Sign in error:", error);
      return { data, error }; 
   }
 
-  // Real signOut function
   async function signOut() {
-    setLoading(true);
-    const { error } = await supabase.auth.signOut();
-    // Note: onAuthStateChange should handle setting user state to null
-    if (error) console.error("Sign out error:", error);
-    setLoading(false);
+    await supabase.auth.signOut();
   }
 
   const value = {

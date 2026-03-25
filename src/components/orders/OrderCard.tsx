@@ -42,6 +42,8 @@ interface WishlistItem {
   } | null;
   quantity: number;
   status: string;
+  requested_pickup_date?: string | null;
+  requested_return_date?: string | null;
   isWishlistItem: boolean;
 }
 
@@ -322,14 +324,24 @@ export default function OrderCard({
               </h4>
               <div className="grid gap-2">
                 {order.associatedWishlistItems.map((wishlistItem) => {
-                  const canFulfill = wishlistItem.item && 
-                    (wishlistItem.item.available_quantity || 0) >= wishlistItem.quantity &&
-                    wishlistItem.quantity > 0;
+                  const isPending = wishlistItem.status === 'pending';
+                  const available = wishlistItem.item?.available_quantity || 0;
+                  const hasStock = available >= wishlistItem.quantity;
+
+                  const statusLabel = !isPending
+                    ? wishlistItem.status === 'added_to_order' ? 'Added to Order' : wishlistItem.status.replace(/_/g, ' ')
+                    : null;
+
+                  const pickupDateStr = wishlistItem.requested_pickup_date
+                    ? format(parseISO(wishlistItem.requested_pickup_date), 'MMM d, yyyy')
+                    : null;
 
                   return (
                     <div
                       key={wishlistItem.wishlist_request_id}
-                      className="flex items-center gap-3 p-3 bg-white rounded-lg border border-orange-100"
+                      className={`flex items-center gap-3 p-3 bg-white rounded-lg border ${
+                        !isPending ? 'border-green-200 bg-green-50/30' : 'border-orange-100'
+                      }`}
                     >
                       <img
                         src={wishlistItem.item?.image_url || 'https://placehold.co/48x48/png'}
@@ -339,10 +351,20 @@ export default function OrderCard({
                       <div className="flex-1">
                         <p className="font-medium text-gray-900">{wishlistItem.item?.name || 'Unknown Item'}</p>
                         <p className="text-sm text-gray-500">
-                          Requested: {wishlistItem.quantity} • Available: {wishlistItem.item?.available_quantity || 0}
+                          Requested: {wishlistItem.quantity} • Available now: {available}
                         </p>
+                        {isPending && pickupDateStr && (
+                          <p className="text-xs text-gray-400 mt-0.5">
+                            Needs by: {pickupDateStr}
+                          </p>
+                        )}
                       </div>
-                      {canFulfill && (
+                      {statusLabel && (
+                        <span className="px-3 py-1.5 bg-green-100 text-green-700 text-sm font-medium rounded-lg">
+                          {statusLabel}
+                        </span>
+                      )}
+                      {isPending && wishlistItem.item && (
                         <button
                           onClick={() => onFulfillWishlist(
                             wishlistItem.wishlist_request_id,
@@ -353,7 +375,12 @@ export default function OrderCard({
                             wishlistItem.quantity
                           )}
                           disabled={isProcessing}
-                          className="px-3 py-1.5 bg-[#0075AE] text-white text-sm font-medium rounded-lg hover:bg-[#005f8c] disabled:opacity-50 transition-colors"
+                          className={`px-3 py-1.5 text-white text-sm font-medium rounded-lg disabled:opacity-50 transition-colors ${
+                            hasStock
+                              ? 'bg-[#0075AE] hover:bg-[#005f8c]'
+                              : 'bg-amber-500 hover:bg-amber-600'
+                          }`}
+                          title={hasStock ? 'Fulfill now — inventory available' : 'Fulfill — inventory not yet available, will be reserved'}
                         >
                           {isProcessing ? 'Processing...' : 'Fulfill'}
                         </button>

@@ -74,19 +74,21 @@
               "method": "post",
               "body": {
                 "subject": "Equipment Pickup - Order @{outputs('Parse_order_id')}",
+                "isAllDay": true,
                 "start": {
-                  "dateTime": "@{outputs('Parse_pickup_date')}T09:00:00",
+                  "dateTime": "@{outputs('Parse_pickup_date')}",
                   "timeZone": "Eastern Standard Time"
                 },
                 "end": {
-                  "dateTime": "@{outputs('Parse_pickup_date')}T10:00:00", 
+                  "dateTime": "@{outputs('Parse_pickup_date')}",
                   "timeZone": "Eastern Standard Time"
                 },
+                "showAs": "free",
                 "location": {
                   "displayName": "Vellum Marketing Office"
                 },
                 "body": {
-                  "content": "Equipment pickup for order @{outputs('Parse_order_id')}. Please arrive at the specified time.",
+                  "content": "Equipment pickup for order @{outputs('Parse_order_id')}. Please arrive during business hours (9 AM - 5 PM). This is a free/transparent reminder that won't block your calendar.",
                   "contentType": "Text"
                 },
                 "attendees": [
@@ -120,19 +122,21 @@
               "method": "post",
               "body": {
                 "subject": "Equipment Return - Order @{outputs('Parse_order_id')}",
+                "isAllDay": true,
                 "start": {
-                  "dateTime": "@{outputs('Parse_return_date')}T09:00:00",
+                  "dateTime": "@{outputs('Parse_return_date')}",
                   "timeZone": "Eastern Standard Time"
                 },
                 "end": {
-                  "dateTime": "@{outputs('Parse_return_date')}T10:00:00",
+                  "dateTime": "@{outputs('Parse_return_date')}",
                   "timeZone": "Eastern Standard Time"
                 },
+                "showAs": "free",
                 "location": {
                   "displayName": "Vellum Marketing Office"
                 },
                 "body": {
-                  "content": "Equipment return for order @{outputs('Parse_order_id')}. Please return all items in good condition.",
+                  "content": "Equipment return for order @{outputs('Parse_order_id')}. Please return all items in good condition during business hours (9 AM - 5 PM). This is a free/transparent reminder that won't block your calendar.",
                   "contentType": "Text"
                 },
                 "attendees": [

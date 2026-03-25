@@ -110,11 +110,7 @@ export default function ItemCalendar({ itemId, itemName }: ItemCalendarProps) {
           status,
           user_name,
           checkouts!inner (
-            quantity,
-            picked_up,
-            returned,
-            created_at,
-            updated_at
+            quantity
           )
         `)
         .eq('checkouts.item_id', itemId)
@@ -124,7 +120,6 @@ export default function ItemCalendar({ itemId, itemName }: ItemCalendarProps) {
 
       if (fetchError) throw fetchError;
 
-      // Transform the data to include actual pickup/return dates
       const transformedData = (data || []).map(order => ({
         id: order.id,
         checkout_date: order.checkout_date,
@@ -132,11 +127,11 @@ export default function ItemCalendar({ itemId, itemName }: ItemCalendarProps) {
         status: order.status,
         user_name: order.user_name,
         quantity: order.checkouts[0].quantity,
-        actual_pickup_date: order.status === 'picked_up' || order.status === 'returned' 
-          ? format(parseISO(order.checkouts[0].updated_at), 'yyyy-MM-dd')
+        actual_pickup_date: (order.status === 'picked_up' || order.status === 'returned')
+          ? order.checkout_date
           : null,
         actual_return_date: order.status === 'returned'
-          ? format(parseISO(order.checkouts[0].updated_at), 'yyyy-MM-dd')
+          ? order.return_date
           : null
       }));
 

@@ -111,7 +111,9 @@ serve(async (req) => {
           order_id,
           requested_quantity,
           status,
-          item_id
+          item_id,
+          requested_pickup_date,
+          requested_return_date
         `)
         .in('order_id', orderIds);
 
@@ -125,7 +127,7 @@ serve(async (req) => {
 
         wishlistItems = wishlists.map(wishlist => ({
           ...wishlist,
-          promo_items: items?.find(item => item.id === wishlist.item_id) || null
+          promo_items: items?.find(item => item.id === wishlist.item_id) || null,
         }));
       }
     } catch (err) {
@@ -151,6 +153,8 @@ serve(async (req) => {
           item: wishlist.promo_items,
           quantity: wishlist.requested_quantity,
           status: wishlist.status,
+          requested_pickup_date: wishlist.requested_pickup_date || null,
+          requested_return_date: wishlist.requested_return_date || null,
           isWishlistItem: true
         }));
 

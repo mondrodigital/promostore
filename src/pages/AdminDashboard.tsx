@@ -21,7 +21,7 @@ interface EditingOrderDates {
 }
 
 function AdminDashboard() {
-  const { user, signOut } = useAuth();
+  const { user, loading: authLoading, signOut } = useAuth();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'inventory' | 'orders' | 'email-settings'>('orders');
   const [items, setItems] = useState<BasePromoItem[]>([]);
@@ -37,8 +37,10 @@ function AdminDashboard() {
   const [editingOrderDates, setEditingOrderDates] = useState<EditingOrderDates | null>(null);
 
   useEffect(() => {
+    if (authLoading) return;
+
     if (!user?.is_admin) {
-      navigate('/');
+      navigate('/login');
       return;
     }
 
@@ -49,7 +51,7 @@ function AdminDashboard() {
     } else if (activeTab === 'email-settings') {
       setLoading(false);
     }
-  }, [activeTab, user, navigate]);
+  }, [activeTab, user, authLoading, navigate]);
 
   const fetchItems = async () => {
     try {
@@ -257,7 +259,7 @@ function AdminDashboard() {
       if (orderToNotify) {
         try {
           const emailPayload = {
-            orderId: orderToNotify.id,
+            orderId: orderToNotify.order_number || orderToNotify.id,
             customerName: orderToNotify.user_name,
             customerEmail: orderToNotify.user_email,
             pickupDate: orderToNotify.checkout_date ? new Date(orderToNotify.checkout_date).toLocaleDateString() : 'N/A',
@@ -389,13 +391,16 @@ function AdminDashboard() {
     setLoading(true);
     setError(null);
     try {
-      const { error: deleteError } = await supabase
-        .from('orders')
-        .delete()
-        .in('id', orderIds);
+      const { data, error: deleteError } = await supabase.rpc(
+        'delete_orders_with_restore',
+        { p_order_ids: orderIds }
+      );
 
       if (deleteError) throw deleteError;
+      if (data && data.success === false) throw new Error(data.message);
+
       await fetchOrders();
+      await fetchItems();
     } catch (err: any) {
       setError(err.message || 'Failed to delete orders.');
     } finally {
@@ -419,19 +424,6 @@ function AdminDashboard() {
     setError(null);
 
     try {
-      // Convert wishlist_only order to pending if needed
-      const order = orders.find(o => o.id === orderId);
-      if (order?.status === 'wishlist_only') {
-        const { error: statusError } = await supabase
-          .from('orders')
-          .update({ status: 'pending' })
-          .eq('id', orderId);
-        
-        if (statusError) {
-          throw new Error(`Failed to update order status: ${statusError.message}`);
-        }
-      }
-
       const { data: rpcData, error: rpcError } = await supabase.rpc(
         'fulfill_wishlist_item',
         {
@@ -448,16 +440,17 @@ function AdminDashboard() {
         throw new Error(rpcData?.message || 'Failed to fulfill wishlist item.');
       }
 
-      // Send notification
       try {
+        const matchedOrder = orders.find(o => o.id === orderId);
         const emailPayload = {
           userEmail: userEmail,
           userName: userName,
           itemName: itemName,
           requestedQuantity: itemQuantity,
           orderId: orderId,
-          requestedPickupDate: order?.checkout_date || 'N/A',
-          requestedReturnDate: order?.return_date || 'N/A'
+          orderNumber: matchedOrder?.order_number || orderId,
+          requestedPickupDate: matchedOrder?.checkout_date || 'N/A',
+          requestedReturnDate: matchedOrder?.return_date || 'N/A'
         };
 
         await supabase.functions.invoke(
@@ -469,6 +462,7 @@ function AdminDashboard() {
       }
 
       await fetchOrders();
+      await fetchItems();
 
     } catch (err: any) {
       setError(err.message || 'An unexpected error occurred during fulfillment.');
@@ -481,11 +475,7 @@ function AdminDashboard() {
     }
   };
 
-  if (!user?.is_admin) {
-    return null;
-  }
-
-  if (loading) {
+  if (authLoading || !user?.is_admin) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-blue-600"></div>

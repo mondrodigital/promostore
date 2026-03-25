@@ -1,10 +1,10 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { Package2, X } from 'lucide-react';
 import { useCart } from '../context/CartContext';
 import { useGuestUser } from '../context/GuestUserContext';
 import { useToast } from '../context/ToastContext';
-import type { PromoItem, CartItem } from '../types';
+import type { PromoItem } from '../types';
 import "react-datepicker/dist/react-datepicker.css";
 import ItemCalendar from '../components/ItemCalendar';
 import SimpleNavbar from '../components/SimpleNavbar';
@@ -12,8 +12,7 @@ import BottomRequestBar from '../components/BottomRequestBar';
 import ItemFilterBar from '../components/ItemFilterBar';
 import {
   validateCartAvailability,
-  createOrder,
-  createCheckoutRecords,
+  createOrderAtomic,
   saveWishlistItems,
   sendOrderNotifications,
   sendPowerAutomateWebhook,
@@ -53,6 +52,7 @@ export default function HomePage() {
   });
   const [activeFilter, setActiveFilter] = useState<Category>('All');
   const [isBannerVisible, setIsBannerVisible] = useState(true);
+  const submittingRef = useRef(false);
 
   const validateEmail = (email: string) => {
     return email.toLowerCase().endsWith('@vellummortgage.com');
@@ -97,7 +97,8 @@ export default function HomePage() {
   }, [guestEmail]);
 
   const handleSubmit = async () => {
-    // Validate required form data
+    if (submittingRef.current) return;
+
     if (!formData.name || !formData.email || !formData.pickupDate || !formData.returnDate || !formData.eventStartDate || !formData.eventEndDate) {
       showError('Please fill in all required fields');
       return;
@@ -113,6 +114,7 @@ export default function HomePage() {
       return;
     }
 
+    submittingRef.current = true;
     setIsSubmitting(true);
     setError(null);
 
@@ -122,54 +124,40 @@ export default function HomePage() {
         const validation = await validateCartAvailability(cartItems);
         
         if (!validation.isValid) {
-          // Handle unavailable items
           if (validation.unavailableItems.length > 0) {
             const itemNames = validation.unavailableItems.map(i => i.name).join(', ');
             showWarning(`Some items are no longer available: ${itemNames}. They have been moved to your wishlist.`);
             
-            // Move unavailable items to wishlist
             validation.unavailableItems.forEach(item => {
               removeFromCart(String(item.id));
               addToWishlist(item, item.requestedQuantity);
             });
           }
           
-          // Handle items with reduced availability
           if (validation.staleItems.length > 0) {
             const staleInfo = validation.staleItems
               .map(s => `${s.item.name} (only ${s.currentAvailable} available)`)
               .join(', ');
             showWarning(`Quantities adjusted for: ${staleInfo}`);
             
-            // Adjust quantities in cart
             validation.staleItems.forEach(staleItem => {
               if (staleItem.currentAvailable > 0) {
-                // Update cart with available quantity
                 removeFromCart(String(staleItem.item.id));
                 addToCart(staleItem.item as PromoItem, staleItem.currentAvailable);
-                // Add remainder to wishlist
                 const remainder = staleItem.requestedQuantity - staleItem.currentAvailable;
                 if (remainder > 0) {
                   addToWishlist(staleItem.item as PromoItem, remainder);
                 }
               } else {
-                // Move entire item to wishlist
                 removeFromCart(String(staleItem.item.id));
                 addToWishlist(staleItem.item as PromoItem, staleItem.requestedQuantity);
               }
             });
           }
           
-          // Re-check if we still have cart items after adjustments
-          if (cartItems.length === 0 && wishlistItems.length === 0) {
-            showError('No items available for checkout. Please try again later.');
-            setIsSubmitting(false);
-            return;
-          }
-          
-          // Let user review the adjusted cart before submitting
           showInfo('Cart has been adjusted. Please review and submit again.');
           setIsSubmitting(false);
+          submittingRef.current = false;
           return;
         }
       }
@@ -180,27 +168,22 @@ export default function HomePage() {
       let orderSuccessful = false;
       let wishlistSaved = false;
 
-      // Create order
       if (cartItems.length > 0) {
-        const orderResult = await createOrder(orderFormData, 'pending');
+        const orderResult = await createOrderAtomic(orderFormData, cartItems, 'pending');
         orderId = orderResult.orderId;
         orderNumber = orderResult.orderNumber;
-        
-        await createCheckoutRecords(orderId, cartItems);
         orderSuccessful = true;
       } else if (wishlistItems.length > 0) {
-        const orderResult = await createOrder(orderFormData, 'wishlist_only');
+        const orderResult = await createOrderAtomic(orderFormData, [], 'wishlist_only');
         orderId = orderResult.orderId;
         orderNumber = orderResult.orderNumber;
       }
 
-      // Save wishlist items
       if (wishlistItems.length > 0 && orderId) {
         await saveWishlistItems(orderId, wishlistItems, orderFormData);
         wishlistSaved = true;
       }
 
-      // Send notifications
       if ((orderSuccessful || wishlistSaved) && orderId) {
         await sendOrderNotifications(orderId, orderNumber, orderFormData, cartItems, wishlistItems);
         
@@ -209,18 +192,15 @@ export default function HomePage() {
         }
       }
 
-      // Cache guest email
       if (guestEmail !== formData.email) {
         setGuestEmail(formData.email);
       }
 
-      // Reset form and cart
       setFormData({ name: '', email: '', pickupDate: null, returnDate: null, eventStartDate: null, eventEndDate: null });
       clearCart();
       clearWishlist();
       await fetchItems();
 
-      // Show success message
       if (orderSuccessful && wishlistSaved) {
         showSuccess('Order submitted and wishlist request saved! Check your email for confirmation.');
       } else if (orderSuccessful) {
@@ -234,6 +214,7 @@ export default function HomePage() {
       showError(err.message || 'Failed to process request. Please try again.');
     } finally {
       setIsSubmitting(false);
+      submittingRef.current = false;
     }
   };
 

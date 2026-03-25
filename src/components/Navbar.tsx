@@ -1,12 +1,9 @@
-import React, { useState, useEffect, Fragment } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { LogIn, LayoutDashboard, Search, LogOut } from 'lucide-react';
-import { supabase } from '../lib/supabase';
-import type { Session } from '@supabase/supabase-js';
 import vellumLogo from '../VellumLogo_Horizontal_Artboard 1.svg';
 import { useAuth } from '../context/AuthContext';
 import TopBookingBar from './TopBookingBar';
-import type { CartItem } from '../types'; // Assuming CartItem type is in types.ts
+import type { CartItem } from '../types';
 
 // Define props accepted by Navbar (including those needed by TopBookingBar)
 interface NavbarProps {
@@ -61,38 +58,12 @@ export default function Navbar({
   removeFromWishlist,
 }: NavbarProps) {
   const { user, signOut } = useAuth();
-  const navigate = useNavigate();
   const location = useLocation();
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const checkAuth = async () => {
-      await supabase.auth.getSession();
-      setLoading(false);
-    };
-    checkAuth();
-
-    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (_event === 'SIGNED_OUT') {
-        // Optional: could navigate here, but useAuth context change should handle it
-      }
-    });
-
-    return () => {
-      authListener?.subscription?.unsubscribe();
-    };
-  }, []);
-
-  // Determine if the consolidated search should be shown
   const showConsolidatedSearch = isScrolled && !isSearchExpanded;
-  // Determine if the full booking bar should be shown
   const showFullBookingBar = !isScrolled || (isScrolled && isSearchExpanded);
 
   if (location.pathname === '/admin') {
-    return null;
-  }
-
-  if (loading) {
     return null;
   }
 
