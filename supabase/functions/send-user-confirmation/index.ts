@@ -142,8 +142,8 @@ serve(async (req) => {
     // --- Fetch Email Settings from DB --- 
     const { data: settingsData, error: settingsError } = await supabaseAdmin
       .from('email_settings')
-      .select('subject_template, body_template')
-      .eq('setting_name', 'user_confirmation')
+      .select('subject, body_html')
+      .eq('template_id', 'user_confirmation')
       .single()
 
     if (settingsError || !settingsData) {
@@ -155,7 +155,7 @@ serve(async (req) => {
       });
     }
 
-    const { subject_template: subjectTemplate, body_template: bodyTemplate } = settingsData;
+    const { subject: subjectTemplate, body_html: bodyTemplate } = settingsData;
     if (!subjectTemplate || !bodyTemplate) {
         // Use the Headers object
         return new Response(JSON.stringify({ message: 'Missing required fields in user confirmation settings.' }), {
@@ -266,7 +266,8 @@ serve(async (req) => {
     // --- End Replace Placeholders --- 
 
     const { data, error } = await resend.emails.send({
-      from: 'Vellum Event Items Store <events@vellummortgage.com>',
+      from: 'Vellum Orders <orders@updates.govellum.com>',
+      replyTo: 'marketing@vellummortgage.com',
       to: [requestPayload.customerEmail],
       subject: subject,
       html: bodyHtml,
