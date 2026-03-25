@@ -93,6 +93,7 @@ serve(async (req) => {
 
     const { data, error } = await resend.emails.send({
       from: 'Vellum Orders <orders@updates.govellum.com>',
+      replyTo: 'marketing@vellummortgage.com',
       to: [orderData.customerEmail],
       subject: subject,
       html: bodyHtml,

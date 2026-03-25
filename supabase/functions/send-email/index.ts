@@ -48,6 +48,7 @@ serve(async (req) => {
     const { data, error } = await resend.emails.send({
       // Revert from address back to Resend testing default
       from: 'onboarding@resend.dev', 
+      replyTo: 'marketing@vellummortgage.com',
       to: [MARKETING_EMAIL],
       subject: `New Order Placed: ${orderData.orderId}`,
       html: `

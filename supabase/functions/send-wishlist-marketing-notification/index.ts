@@ -121,6 +121,7 @@ serve(async (req) => {
   try {
     const { data, error } = await resend.emails.send({
       from: 'Vellum Event Items Store Automation <events@vellummortgage.com>', // Use a specific 'from' if desired
+      replyTo: 'marketing@vellummortgage.com',
       to: [MARKETING_EMAIL_ADDRESS], // Send to the configured marketing address
       subject: subject,
       html: bodyHtml,

@@ -184,6 +184,7 @@ serve(async (req) => {
 
     const { data, error } = await resend.emails.send({
       from: 'Vellum Event Items Store <events@vellummortgage.com>',
+      replyTo: 'marketing@vellummortgage.com',
       to: ['marketing@vellummortgage.com'], // Keep destination as marketing
       subject: subject,
       html: bodyHtml, // Use the processed HTML
