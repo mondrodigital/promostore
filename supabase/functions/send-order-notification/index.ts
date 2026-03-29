@@ -105,9 +105,9 @@ serve(async (req)=>{
     // --- End Fetch Email Settings --- 
     // --- Generate HTML for Item Lists (similar to user confirmation) --- 
     const generateItemsHtml = (items)=>{
-      return items.length > 0 ? `<ul style="list-style-type: none; padding: 0;">${items.map((item)=>`<li style="padding: 8px 0; border-bottom: 1px solid #eee;">
+      return items.length > 0 ? `<ul style="list-style-type: none; padding: 0; margin: 0;">${items.map((item)=>`<li style="padding: 8px 0; border-bottom: 1px solid #eee; font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.6;">
               ${item.name} (Qty: ${item.quantity})
-             </li>`).join('')}</ul>` : ''; // Return empty string if no items
+             </li>`).join('')}</ul>` : '';
     };
     const checkedOutItemsHtml = generateItemsHtml(requestPayload.checkedOutItems);
     const wishlistItemsHtml = generateItemsHtml(requestPayload.wishlistItems);

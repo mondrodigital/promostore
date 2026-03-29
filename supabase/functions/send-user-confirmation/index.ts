@@ -168,11 +168,11 @@ serve(async (req) => {
     // --- Generate HTML for Item Lists --- 
     const generateItemsHtml = (items: { name: string; quantity: number }[]) => {
       return items.length > 0
-        ? `<ul style="list-style-type: none; padding: 0;">${items.map(item => 
-            `<li style="padding: 8px 0; border-bottom: 1px solid #eee;">
+        ? `<ul style="list-style-type: none; padding: 0; margin: 0;">${items.map(item => 
+            `<li style="padding: 8px 0; border-bottom: 1px solid #eee; font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.6;">
               ${item.name} (Qty: ${item.quantity})
              </li>`).join('')}</ul>`
-        : ''; // Return empty string if no items
+        : '';
     };
 
     const checkedOutItemsHtml = generateItemsHtml(requestPayload.checkedOutItems);
