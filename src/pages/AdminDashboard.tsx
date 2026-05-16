@@ -30,6 +30,7 @@ function AdminDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [processingOrders, setProcessingOrders] = useState<Set<string>>(new Set());
+  const [retryingNotificationOrderIds, setRetryingNotificationOrderIds] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
 
@@ -408,6 +409,37 @@ function AdminDashboard() {
     }
   };
 
+  const handleRetryNotification = async (orderId: string) => {
+    setRetryingNotificationOrderIds((prev) => new Set([...prev, orderId]));
+    setError(null);
+    try {
+      const { data, error: invokeError } = await supabase.functions.invoke(
+        'retry-order-notification',
+        { body: { order_id: orderId } }
+      );
+
+      if (invokeError) {
+        throw new Error(invokeError.message || 'Failed to retry notification');
+      }
+
+      // Edge function returns { success, attempts, status, error, ... }.
+      if (data && data.success === false) {
+        throw new Error(data.error || 'Power Automate webhook still failing after retry');
+      }
+
+      await fetchOrders();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to retry notification';
+      setError(message);
+    } finally {
+      setRetryingNotificationOrderIds((prev) => {
+        const next = new Set(prev);
+        next.delete(orderId);
+        return next;
+      });
+    }
+  };
+
   const handleFulfillWishlistItem = async (
     wishlistRequestId: string,
     orderId: string,
@@ -560,6 +592,8 @@ function AdminDashboard() {
             onEditDates={handleOpenEditDatesModal}
             onDeleteSelected={handleDeleteOrders}
             onFulfillWishlist={handleFulfillWishlistItem}
+            onRetryNotification={handleRetryNotification}
+            retryingNotificationOrderIds={retryingNotificationOrderIds}
             processingOrders={processingOrders}
             getAvailableStatuses={getAvailableStatuses}
           />

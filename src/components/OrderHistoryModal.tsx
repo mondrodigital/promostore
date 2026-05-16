@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, Package, Calendar, Clock, ChevronDown, ChevronUp, RefreshCw, LogOut } from 'lucide-react';
+import { X, Package, Calendar, Clock, ChevronDown, ChevronUp, RefreshCw, LogOut, Hourglass } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { format } from 'date-fns';
+import { format, parseISO, differenceInCalendarDays, isValid } from 'date-fns';
 
 interface OrderHistoryItem {
   id: string;
@@ -31,6 +31,8 @@ interface OrderHistoryItem {
     };
     quantity: number;
     status: string;
+    expires_at?: string | null;
+    expired_notified_at?: string | null;
   }>;
 }
 
@@ -321,26 +323,68 @@ export default function OrderHistoryModal({ isOpen, onClose, userEmail, onReorde
                         <div>
                           <h4 className="text-sm font-semibold text-gray-900 mb-3">Wishlist Items</h4>
                           <div className="space-y-2">
-                            {order.associatedWishlistItems.map((wishlistItem, idx) => (
-                              <div
-                                key={idx}
-                                className="flex items-center gap-3 p-3 bg-orange-50 rounded-lg border border-orange-200"
-                              >
-                                {wishlistItem.item.image_url && (
-                                  <img
-                                    src={wishlistItem.item.image_url}
-                                    alt={wishlistItem.item.name}
-                                    className="w-12 h-12 object-cover rounded"
-                                  />
-                                )}
-                                <div className="flex-1">
-                                  <p className="font-medium text-orange-900">{wishlistItem.item.name}</p>
-                                  <p className="text-sm text-orange-700">
-                                    Requested: {wishlistItem.quantity}
-                                  </p>
+                            {order.associatedWishlistItems.map((wishlistItem, idx) => {
+                              const isPending = wishlistItem.status === 'pending';
+                              const isExpired = wishlistItem.status === 'expired';
+                              let expiresAtDate: Date | null = null;
+                              if (wishlistItem.expires_at) {
+                                const parsed = parseISO(wishlistItem.expires_at);
+                                if (isValid(parsed)) expiresAtDate = parsed;
+                              }
+                              const daysUntilExpiry = expiresAtDate
+                                ? differenceInCalendarDays(expiresAtDate, new Date())
+                                : null;
+                              const isExpiringSoon =
+                                isPending && daysUntilExpiry !== null && daysUntilExpiry >= 0 && daysUntilExpiry <= 7;
+
+                              return (
+                                <div
+                                  key={idx}
+                                  className={`flex items-center gap-3 p-3 rounded-lg border ${
+                                    isExpired
+                                      ? 'bg-gray-50 border-gray-200'
+                                      : 'bg-orange-50 border-orange-200'
+                                  }`}
+                                >
+                                  {wishlistItem.item.image_url && (
+                                    <img
+                                      src={wishlistItem.item.image_url}
+                                      alt={wishlistItem.item.name}
+                                      className="w-12 h-12 object-cover rounded"
+                                    />
+                                  )}
+                                  <div className="flex-1">
+                                    <p className={`font-medium ${isExpired ? 'text-gray-900' : 'text-orange-900'}`}>
+                                      {wishlistItem.item.name}
+                                    </p>
+                                    <p className={`text-sm ${isExpired ? 'text-gray-600' : 'text-orange-700'}`}>
+                                      Requested: {wishlistItem.quantity}
+                                    </p>
+                                    {isPending && expiresAtDate && (
+                                      <p className="text-xs text-orange-700/80 mt-0.5">
+                                        Expires: {format(expiresAtDate, 'MMM d, yyyy')}
+                                      </p>
+                                    )}
+                                    {isExpired && (
+                                      <p className="text-xs text-gray-500 mt-0.5">
+                                        This request expired. Submit a new request if you still need it.
+                                      </p>
+                                    )}
+                                  </div>
+                                  {isExpiringSoon && (
+                                    <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200 rounded-lg">
+                                      <Hourglass className="h-3 w-3" />
+                                      Expiring soon
+                                    </span>
+                                  )}
+                                  {isExpired && (
+                                    <span className="px-2 py-1 text-xs font-medium bg-gray-200 text-gray-700 rounded-lg">
+                                      Expired
+                                    </span>
+                                  )}
                                 </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         </div>
                       )}
