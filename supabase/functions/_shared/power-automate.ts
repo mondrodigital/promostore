@@ -23,6 +23,7 @@ const FALLBACK_WEBHOOK_URL =
 
 export const POWER_AUTOMATE_WEBHOOK_URL =
   // deno-lint-ignore no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (globalThis as any).Deno?.env?.get?.('POWER_AUTOMATE_WEBHOOK_URL') ??
   FALLBACK_WEBHOOK_URL;
 
@@ -53,6 +54,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 interface SupabaseLikeClient {
   // deno-lint-ignore no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   from: (table: string) => any;
 }
 
