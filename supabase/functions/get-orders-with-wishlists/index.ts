@@ -113,7 +113,10 @@ serve(async (req) => {
           status,
           item_id,
           requested_pickup_date,
-          requested_return_date
+          requested_return_date,
+          created_at,
+          expires_at,
+          expired_notified_at
         `)
         .in('order_id', orderIds);
 
@@ -155,6 +158,9 @@ serve(async (req) => {
           status: wishlist.status,
           requested_pickup_date: wishlist.requested_pickup_date || null,
           requested_return_date: wishlist.requested_return_date || null,
+          created_at: wishlist.created_at || null,
+          expires_at: wishlist.expires_at || null,
+          expired_notified_at: wishlist.expired_notified_at || null,
           isWishlistItem: true
         }));
 

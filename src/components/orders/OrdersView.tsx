@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Search, Filter, Trash2, RefreshCw, ChevronDown } from 'lucide-react';
+import { Search, Filter, Trash2, RefreshCw, ChevronDown, AlertTriangle, Hourglass } from 'lucide-react';
 import OrderCard, { OrderWithDetails } from './OrderCard';
 import type { Order } from '../../types';
 
@@ -21,6 +21,8 @@ interface OrdersViewProps {
     itemName: string,
     itemQuantity: number
   ) => void;
+  onRetryNotification?: (orderId: string) => void | Promise<void>;
+  retryingNotificationOrderIds?: Set<string>;
   processingOrders: Set<string>;
   getAvailableStatuses: (status: Order['status']) => Order['status'][];
 }
@@ -43,6 +45,8 @@ export default function OrdersView({
   onEditDates,
   onDeleteSelected,
   onFulfillWishlist,
+  onRetryNotification,
+  retryingNotificationOrderIds,
   processingOrders,
   getAvailableStatuses
 }: OrdersViewProps) {
@@ -50,6 +54,25 @@ export default function OrdersView({
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [selectedOrderIds, setSelectedOrderIds] = useState<Set<string>>(new Set());
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
+  // Workstream C: filter chips for notification issues and expired wishlists.
+  const [showNotificationIssuesOnly, setShowNotificationIssuesOnly] = useState(false);
+  const [showExpiredWishlistsOnly, setShowExpiredWishlistsOnly] = useState(false);
+
+  const notificationIssuesCount = useMemo(
+    () =>
+      orders.filter(
+        (o) => o.notification_status === 'failed' || o.notification_status === 'retrying',
+      ).length,
+    [orders],
+  );
+
+  const expiredWishlistsCount = useMemo(
+    () =>
+      orders.filter((o) =>
+        (o.associatedWishlistItems ?? []).some((w) => w.status === 'expired'),
+      ).length,
+    [orders],
+  );
 
   // Filter orders based on search and status
   const filteredOrders = useMemo(() => {
@@ -57,6 +80,24 @@ export default function OrdersView({
       // Status filter
       if (statusFilter !== 'all' && order.status !== statusFilter) {
         return false;
+      }
+
+      // Notification-issues filter chip
+      if (showNotificationIssuesOnly) {
+        if (
+          order.notification_status !== 'failed' &&
+          order.notification_status !== 'retrying'
+        ) {
+          return false;
+        }
+      }
+
+      // Expired-wishlist filter chip
+      if (showExpiredWishlistsOnly) {
+        const hasExpired = (order.associatedWishlistItems ?? []).some(
+          (w) => w.status === 'expired',
+        );
+        if (!hasExpired) return false;
       }
 
       // Search filter
@@ -73,7 +114,7 @@ export default function OrdersView({
 
       return true;
     });
-  }, [orders, searchQuery, statusFilter]);
+  }, [orders, searchQuery, statusFilter, showNotificationIssuesOnly, showExpiredWishlistsOnly]);
 
   // Group orders by status for better organization
   const groupedOrders = useMemo(() => {
@@ -215,6 +256,44 @@ export default function OrdersView({
           </button>
         </div>
 
+        {/* Issue-focused filter chips */}
+        {(notificationIssuesCount > 0 || expiredWishlistsCount > 0 || showNotificationIssuesOnly || showExpiredWishlistsOnly) && (
+          <div className="flex flex-wrap items-center gap-2 mt-4">
+            <button
+              type="button"
+              onClick={() => setShowNotificationIssuesOnly((v) => !v)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-full border transition-colors ${
+                showNotificationIssuesOnly
+                  ? 'bg-red-50 text-red-700 border-red-300'
+                  : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+              }`}
+              title="Show only orders where the Power Automate webhook is failing or retrying"
+            >
+              <AlertTriangle className="h-3.5 w-3.5" />
+              Notification issues
+              <span className={`px-1.5 rounded-full text-xs ${showNotificationIssuesOnly ? 'bg-red-200 text-red-800' : 'bg-gray-100 text-gray-600'}`}>
+                {notificationIssuesCount}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowExpiredWishlistsOnly((v) => !v)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-full border transition-colors ${
+                showExpiredWishlistsOnly
+                  ? 'bg-amber-50 text-amber-700 border-amber-300'
+                  : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+              }`}
+              title="Show only orders that contain at least one expired wishlist request"
+            >
+              <Hourglass className="h-3.5 w-3.5" />
+              Expired wishlists
+              <span className={`px-1.5 rounded-full text-xs ${showExpiredWishlistsOnly ? 'bg-amber-200 text-amber-800' : 'bg-gray-100 text-gray-600'}`}>
+                {expiredWishlistsCount}
+              </span>
+            </button>
+          </div>
+        )}
+
         {/* Bulk Actions */}
         {filteredOrders.length > 0 && (
           <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-100">
@@ -284,6 +363,8 @@ export default function OrdersView({
                     onEditDates={onEditDates}
                     onFulfillWishlist={onFulfillWishlist}
                     availableStatuses={getAvailableStatuses(order.status)}
+                    onRetryNotification={onRetryNotification}
+                    isRetryingNotification={retryingNotificationOrderIds?.has(order.id) ?? false}
                   />
                 ))}
               </div>
@@ -310,6 +391,8 @@ export default function OrdersView({
                     onEditDates={onEditDates}
                     onFulfillWishlist={onFulfillWishlist}
                     availableStatuses={getAvailableStatuses(order.status)}
+                    onRetryNotification={onRetryNotification}
+                    isRetryingNotification={retryingNotificationOrderIds?.has(order.id) ?? false}
                   />
                 ))}
               </div>
@@ -336,6 +419,8 @@ export default function OrdersView({
                     onEditDates={onEditDates}
                     onFulfillWishlist={onFulfillWishlist}
                     availableStatuses={getAvailableStatuses(order.status)}
+                    onRetryNotification={onRetryNotification}
+                    isRetryingNotification={retryingNotificationOrderIds?.has(order.id) ?? false}
                   />
                 ))}
               </div>

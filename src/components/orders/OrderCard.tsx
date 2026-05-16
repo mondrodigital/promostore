@@ -325,22 +325,45 @@ export default function OrderCard({
               <div className="grid gap-2">
                 {order.associatedWishlistItems.map((wishlistItem) => {
                   const isPending = wishlistItem.status === 'pending';
+                  const isExpired = wishlistItem.status === 'expired';
                   const available = wishlistItem.item?.available_quantity || 0;
                   const hasStock = available >= wishlistItem.quantity;
 
                   const statusLabel = !isPending
-                    ? wishlistItem.status === 'added_to_order' ? 'Added to Order' : wishlistItem.status.replace(/_/g, ' ')
+                    ? wishlistItem.status === 'added_to_order'
+                      ? 'Added to Order'
+                      : wishlistItem.status === 'expired'
+                        ? 'Expired'
+                        : wishlistItem.status.replace(/_/g, ' ')
                     : null;
 
                   const pickupDateStr = wishlistItem.requested_pickup_date
                     ? format(parseISO(wishlistItem.requested_pickup_date), 'MMM d, yyyy')
                     : null;
 
+                  let daysUntilExpiry: number | null = null;
+                  let expiryDateStr: string | null = null;
+                  if (wishlistItem.expires_at) {
+                    try {
+                      const expiresAt = parseISO(wishlistItem.expires_at);
+                      daysUntilExpiry = differenceInCalendarDays(expiresAt, new Date());
+                      expiryDateStr = format(expiresAt, 'MMM d, yyyy');
+                    } catch {
+                      // ignore parse errors
+                    }
+                  }
+                  const isExpiringSoon =
+                    isPending && daysUntilExpiry !== null && daysUntilExpiry >= 0 && daysUntilExpiry <= 7;
+
                   return (
                     <div
                       key={wishlistItem.wishlist_request_id}
                       className={`flex items-center gap-3 p-3 bg-white rounded-lg border ${
-                        !isPending ? 'border-green-200 bg-green-50/30' : 'border-orange-100'
+                        isExpired
+                          ? 'border-gray-200 bg-gray-50/60'
+                          : !isPending
+                            ? 'border-green-200 bg-green-50/30'
+                            : 'border-orange-100'
                       }`}
                     >
                       <img
@@ -358,9 +381,29 @@ export default function OrderCard({
                             Needs by: {pickupDateStr}
                           </p>
                         )}
+                        {isPending && expiryDateStr && (
+                          <p className="text-xs text-gray-400 mt-0.5">
+                            Expires: {expiryDateStr}
+                          </p>
+                        )}
                       </div>
+                      {isExpiringSoon && (
+                        <span
+                          className="inline-flex items-center gap-1 px-2 py-1 bg-amber-50 text-amber-700 border border-amber-200 text-xs font-medium rounded-lg"
+                          title={`Expires in ${daysUntilExpiry} day${daysUntilExpiry === 1 ? '' : 's'}`}
+                        >
+                          <Hourglass className="h-3 w-3" />
+                          Expiring soon
+                        </span>
+                      )}
                       {statusLabel && (
-                        <span className="px-3 py-1.5 bg-green-100 text-green-700 text-sm font-medium rounded-lg">
+                        <span
+                          className={`px-3 py-1.5 text-sm font-medium rounded-lg ${
+                            isExpired
+                              ? 'bg-gray-200 text-gray-700'
+                              : 'bg-green-100 text-green-700'
+                          }`}
+                        >
                           {statusLabel}
                         </span>
                       )}
