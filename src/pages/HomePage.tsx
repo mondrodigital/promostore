@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
 import { supabase } from '../lib/supabase';
-import { Package2, X } from 'lucide-react';
+import { Package2, X, CalendarRange } from 'lucide-react';
 import { useCart } from '../context/CartContext';
 import { useGuestUser } from '../context/GuestUserContext';
 import { useToast } from '../context/ToastContext';
@@ -10,13 +10,17 @@ import ItemCalendar from '../components/ItemCalendar';
 import SimpleNavbar from '../components/SimpleNavbar';
 import BottomRequestBar from '../components/BottomRequestBar';
 import ItemFilterBar from '../components/ItemFilterBar';
+import AvailabilityInfo from '../components/AvailabilityInfo';
 import {
   validateCartAvailability,
   createOrderAtomic,
   saveWishlistItems,
   sendOrderNotifications,
   sendPowerAutomateWebhook,
-  type OrderFormData
+  fetchAvailabilityForDates,
+  InsufficientStockError,
+  type OrderFormData,
+  type DateAwareAvailability,
 } from '../services/orderService';
 
 type Category = 'All' | 'Tents' | 'Tables' | 'Linens' | 'Displays' | 'Decor' | 'Games' | 'Misc';
@@ -53,6 +57,11 @@ export default function HomePage() {
   const [activeFilter, setActiveFilter] = useState<Category>('All');
   const [isBannerVisible, setIsBannerVisible] = useState(true);
   const submittingRef = useRef(false);
+
+  // Map of item_id -> date-aware availability for the chosen [pickup, return]
+  // window. Empty until the user picks both dates.
+  const [dateAvailability, setDateAvailability] = useState<Record<string, DateAwareAvailability>>({});
+  const [availabilityLoading, setAvailabilityLoading] = useState(false);
 
   const validateEmail = (email: string) => {
     return email.toLowerCase().endsWith('@vellummortgage.com');
@@ -96,6 +105,52 @@ export default function HomePage() {
     }
   }, [guestEmail]);
 
+  // Refresh date-aware availability whenever pickup/return dates or the item
+  // list change. When dates are not both selected, clear the map so the UI
+  // falls back to the "Pick dates to see availability" hint.
+  const pickupDate = formData.pickupDate;
+  const returnDate = formData.returnDate;
+  useEffect(() => {
+    if (!pickupDate || !returnDate || items.length === 0) {
+      setDateAvailability({});
+      return;
+    }
+
+    let cancelled = false;
+    setAvailabilityLoading(true);
+    fetchAvailabilityForDates(items.map(i => String(i.id)), pickupDate, returnDate)
+      .then(rows => {
+        if (cancelled) return;
+        const next: Record<string, DateAwareAvailability> = {};
+        rows.forEach(row => {
+          next[row.itemId] = row;
+        });
+        setDateAvailability(next);
+      })
+      .catch(err => {
+        console.error('Failed to load date-aware availability', err);
+        if (!cancelled) setDateAvailability({});
+      })
+      .finally(() => {
+        if (!cancelled) setAvailabilityLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pickupDate, returnDate, items]);
+
+  // Resolves the effective available quantity for an item, preferring the
+  // date-aware value when dates have been picked.
+  const getEffectiveAvailable = (item: PromoItem): number => {
+    const datesPicked = !!(formData.pickupDate && formData.returnDate);
+    if (!datesPicked) return item.available_quantity;
+    const row = dateAvailability[String(item.id)];
+    return row ? row.availableQuantity : item.available_quantity;
+  };
+
+  const datesPicked = !!(formData.pickupDate && formData.returnDate);
+
   const handleSubmit = async () => {
     if (submittingRef.current) return;
 
@@ -118,44 +173,71 @@ export default function HomePage() {
     setIsSubmitting(true);
     setError(null);
 
+    // Helper: apply structured stock conflicts to the cart and surface a
+    // specific, per-item message (issue #17). Used both for the pre-submit
+    // validation pass AND for the post-submit race-condition recovery (#14).
+    const applyConflictsAndNotify = (
+      conflicts: Array<{ item_id: string; item_name?: string; requested: number; available: number }>
+    ) => {
+      conflicts.forEach(conflict => {
+        const cartItem = cartItems.find(c => String(c.id) === String(conflict.item_id));
+        if (!cartItem) return;
+
+        removeFromCart(String(cartItem.id));
+        if (conflict.available > 0) {
+          addToCart(cartItem as PromoItem, conflict.available);
+          const remainder = conflict.requested - conflict.available;
+          if (remainder > 0) {
+            addToWishlist(cartItem as PromoItem, remainder);
+          }
+        } else {
+          addToWishlist(cartItem as PromoItem, conflict.requested);
+        }
+      });
+
+      const lines = conflicts.map(c => {
+        const name = c.item_name
+          ?? cartItems.find(ci => String(ci.id) === String(c.item_id))?.name
+          ?? 'Item';
+        return c.available > 0
+          ? `${name}: requested ${c.requested}, only ${c.available} available`
+          : `${name}: requested ${c.requested}, none available — moved to wishlist`;
+      });
+
+      const headline = conflicts.length === 1
+        ? 'Cart adjusted for 1 item'
+        : `Cart adjusted for ${conflicts.length} items`;
+      showWarning(`${headline}:\n${lines.join('\n')}`);
+      showInfo('Please review your updated cart and submit again.');
+    };
+
     try {
-      // Validate cart availability before proceeding
+      // Pre-submit: validate cart availability against the chosen dates so we
+      // can show a helpful message before doing the heavier order RPC.
       if (cartItems.length > 0) {
-        const validation = await validateCartAvailability(cartItems);
-        
+        const validation = await validateCartAvailability(
+          cartItems,
+          formData.pickupDate,
+          formData.returnDate
+        );
+
         if (!validation.isValid) {
-          if (validation.unavailableItems.length > 0) {
-            const itemNames = validation.unavailableItems.map(i => i.name).join(', ');
-            showWarning(`Some items are no longer available: ${itemNames}. They have been moved to your wishlist.`);
-            
-            validation.unavailableItems.forEach(item => {
-              removeFromCart(String(item.id));
-              addToWishlist(item, item.requestedQuantity);
-            });
-          }
-          
-          if (validation.staleItems.length > 0) {
-            const staleInfo = validation.staleItems
-              .map(s => `${s.item.name} (only ${s.currentAvailable} available)`)
-              .join(', ');
-            showWarning(`Quantities adjusted for: ${staleInfo}`);
-            
-            validation.staleItems.forEach(staleItem => {
-              if (staleItem.currentAvailable > 0) {
-                removeFromCart(String(staleItem.item.id));
-                addToCart(staleItem.item as PromoItem, staleItem.currentAvailable);
-                const remainder = staleItem.requestedQuantity - staleItem.currentAvailable;
-                if (remainder > 0) {
-                  addToWishlist(staleItem.item as PromoItem, remainder);
-                }
-              } else {
-                removeFromCart(String(staleItem.item.id));
-                addToWishlist(staleItem.item as PromoItem, staleItem.requestedQuantity);
-              }
-            });
-          }
-          
-          showInfo('Cart has been adjusted. Please review and submit again.');
+          const conflicts = [
+            ...validation.unavailableItems.map(item => ({
+              item_id: String(item.id),
+              item_name: item.name,
+              requested: item.requestedQuantity,
+              available: 0,
+            })),
+            ...validation.staleItems.map(s => ({
+              item_id: String(s.item.id),
+              item_name: s.item.name,
+              requested: s.requestedQuantity,
+              available: s.currentAvailable,
+            })),
+          ];
+
+          applyConflictsAndNotify(conflicts);
           setIsSubmitting(false);
           submittingRef.current = false;
           return;
@@ -169,10 +251,23 @@ export default function HomePage() {
       let wishlistSaved = false;
 
       if (cartItems.length > 0) {
-        const orderResult = await createOrderAtomic(orderFormData, cartItems, 'pending');
-        orderId = orderResult.orderId;
-        orderNumber = orderResult.orderNumber;
-        orderSuccessful = true;
+        try {
+          const orderResult = await createOrderAtomic(orderFormData, cartItems, 'pending');
+          orderId = orderResult.orderId;
+          orderNumber = orderResult.orderNumber;
+          orderSuccessful = true;
+        } catch (rpcErr) {
+          // Race condition (#14): another order grabbed inventory between our
+          // pre-validation and the server-side transaction. The RPC returns a
+          // structured per-item conflict list which we re-apply to the cart.
+          if (rpcErr instanceof InsufficientStockError) {
+            applyConflictsAndNotify(rpcErr.conflicts);
+            setIsSubmitting(false);
+            submittingRef.current = false;
+            return;
+          }
+          throw rpcErr;
+        }
       } else if (wishlistItems.length > 0) {
         const orderResult = await createOrderAtomic(orderFormData, [], 'wishlist_only');
         orderId = orderResult.orderId;
@@ -267,7 +362,7 @@ export default function HomePage() {
       reorderItems.forEach(reorderItem => {
         const itemData = currentItems?.find(item => item.id === reorderItem.id);
         if (itemData) {
-          const availableQuantity = itemData.available_quantity;
+          const availableQuantity = getEffectiveAvailable(itemData);
           const requestedQuantity = reorderItem.quantity;
           
           if (availableQuantity > 0) {
@@ -345,11 +440,25 @@ export default function HomePage() {
             </div>
           )}
 
+          {!datesPicked && (
+            <div className="mb-4 flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+              <CalendarRange className="h-5 w-5 flex-shrink-0 text-blue-600" />
+              <div>
+                <p className="font-medium">Pick your pickup and return dates to see real availability.</p>
+                <p className="text-xs text-blue-700 mt-0.5">
+                  Until you do, each card shows the total stock — items may already be reserved for other dates.
+                </p>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6">
             {filteredItems.length > 0 ? (
               filteredItems.map((item) => {
                 const cartQuantity = getItemQuantity(String(item.id));
-                const isOutOfStock = item.available_quantity <= 0;
+                const effectiveAvailable = getEffectiveAvailable(item);
+                const isOutOfStock = datesPicked ? effectiveAvailable <= 0 : item.available_quantity <= 0;
+                const hasConflicts = datesPicked && effectiveAvailable < item.total_quantity;
                 return (
                   <div key={item.id} className="bg-white rounded-xl shadow-lg overflow-hidden flex flex-col">
                     <div className="aspect-square relative">
@@ -380,8 +489,38 @@ export default function HomePage() {
                       
                       <div className="flex items-center justify-between mb-4 mt-auto pt-4 border-t border-gray-100">
                         <div className="text-sm text-[#58595B] opacity-80">
-                          <p>Available: {item.available_quantity}</p>
-                          <p>Total: {item.total_quantity}</p>
+                          {datesPicked ? (
+                            <>
+                              <p>
+                                Available for your dates:{' '}
+                                <span className={`font-semibold ${effectiveAvailable === 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                                  {availabilityLoading && dateAvailability[String(item.id)] === undefined
+                                    ? '…'
+                                    : effectiveAvailable}
+                                </span>
+                                {' '}of {item.total_quantity}
+                              </p>
+                              {hasConflicts && (
+                                <div className="mt-1">
+                                  <AvailabilityInfo
+                                    itemId={String(item.id)}
+                                    startDate={formData.pickupDate!}
+                                    endDate={formData.returnDate!}
+                                    label={
+                                      effectiveAvailable === 0
+                                        ? 'Why unavailable?'
+                                        : `Only ${effectiveAvailable} free — why?`
+                                    }
+                                  />
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              <p>Total: {item.total_quantity}</p>
+                              <p className="text-xs text-gray-500 italic">Pick dates to see availability</p>
+                            </>
+                          )}
                         </div>
                       </div>
 
@@ -394,35 +533,35 @@ export default function HomePage() {
                           id={`quantity-${item.id}`}
                         />
                         <button
-                          className={`flex-1 px-4 py-2 rounded-lg transition-colors text-white ${ 
-                            isOutOfStock 
+                          className={`flex-1 px-4 py-2 rounded-lg transition-colors text-white ${
+                            isOutOfStock
                               ? 'bg-orange-500 hover:bg-orange-600'
                               : 'bg-[#0075AE] hover:bg-[#005f8c] disabled:opacity-50 disabled:cursor-not-allowed'
                            }`}
-                          disabled={!isOutOfStock && cartQuantity >= item.available_quantity}
+                          disabled={!isOutOfStock && cartQuantity >= effectiveAvailable}
                           onClick={() => {
                             const input = document.getElementById(`quantity-${item.id}`) as HTMLInputElement;
                             const quantity = parseInt(input.value) || 1;
-                            
+
                             if (quantity <= 0) {
                               showError('Please enter a valid quantity');
                               return;
                             }
-                            
+
                             if (isOutOfStock) {
                               addToWishlist(item, quantity);
                               showInfo(`${item.name} added to wishlist`);
                             } else {
                               const currentInCart = getItemQuantity(String(item.id));
                               const totalRequested = currentInCart + quantity;
-                              
-                              if (totalRequested <= item.available_quantity) {
+
+                              if (totalRequested <= effectiveAvailable) {
                                 addToCart(item, quantity);
                                 showSuccess(`${item.name} added to cart`);
                               } else {
-                                const maxAddable = item.available_quantity - currentInCart;
+                                const maxAddable = effectiveAvailable - currentInCart;
                                 if (maxAddable > 0) {
-                                  showWarning(`Only ${maxAddable} more available. Adjusted quantity.`);
+                                  showWarning(`Only ${maxAddable} more available for your dates. Adjusted quantity.`);
                                   addToCart(item, maxAddable);
                                 } else {
                                   showWarning(`Maximum quantity already in cart`);
@@ -432,7 +571,7 @@ export default function HomePage() {
                             input.value = "1";
                           }}
                         >
-                          {isOutOfStock ? 'Add to Wishlist' : (cartQuantity >= item.available_quantity ? 'Max in Cart' : 'Add to Cart')}
+                          {isOutOfStock ? 'Add to Wishlist' : (cartQuantity >= effectiveAvailable ? 'Max in Cart' : 'Add to Cart')}
                         </button>
                       </div>
                     </div>
@@ -477,6 +616,7 @@ export default function HomePage() {
         wishlistItems={wishlistItems}
         removeFromWishlist={removeFromWishlist}
         onReorderItems={handleReorderItems}
+        dateAvailability={dateAvailability}
       />
     </div>
   );

@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import DatePicker from 'react-datepicker';
 import { format } from 'date-fns';
-import { X, ShoppingCart, ChevronUp, ChevronDown, AlertCircle, History } from 'lucide-react';
+import { X, ShoppingCart, ChevronUp, ChevronDown, AlertCircle, History, Info } from 'lucide-react';
 import type { CartItem } from '../types';
 import OrderHistoryModal from './OrderHistoryModal';
+import AvailabilityInfo from './AvailabilityInfo';
 import { useGuestUser } from '../context/GuestUserContext';
+import type { DateAwareAvailability } from '../services/orderService';
 
 interface BottomRequestBarProps {
   formData: {
@@ -27,6 +29,10 @@ interface BottomRequestBarProps {
   wishlistItems: CartItem[];
   removeFromWishlist: (itemId: string) => void;
   onReorderItems: (items: Array<{ id: string; quantity: number }>) => void;
+  // Date-aware availability map for the currently-selected pickup/return window.
+  // Used to surface a non-blocking "heads up — N also reserved for these dates"
+  // note next to cart items (issue #9). Empty / unused when dates not yet picked.
+  dateAvailability?: Record<string, DateAwareAvailability>;
 }
 
 export default function BottomRequestBar({
@@ -43,6 +49,7 @@ export default function BottomRequestBar({
   wishlistItems,
   removeFromWishlist,
   onReorderItems,
+  dateAvailability,
 }: BottomRequestBarProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [showValidation, setShowValidation] = useState(false);
@@ -407,27 +414,65 @@ export default function BottomRequestBar({
                       <p className="text-sm text-gray-500 italic pl-2">No items added to checkout yet.</p>
                     ) : (
                       <div className="space-y-3">
-                        {cartItems.map((item) => (
-                          <div key={`cart-${item.id}`} className="flex items-center gap-3 bg-green-50 p-3 rounded-lg border border-green-200">
-                            {item.image_url && (
-                              <img
-                                src={item.image_url}
-                                alt={item.name}
-                                className="w-16 h-16 object-cover rounded flex-shrink-0"
-                              />
-                            )}
-                            <div className="flex-1">
-                              <h5 className="font-medium text-gray-900">{item.name}</h5>
-                              <p className="text-sm text-gray-600">Quantity: {item.requestedQuantity}</p>
-                            </div>
-                            <button
-                              onClick={() => removeFromCart(String(item.id))}
-                              className="text-red-600 hover:text-red-700 text-sm font-medium"
+                        {cartItems.map((item) => {
+                          // Heads-up (#9): if dates are picked AND there are
+                          // other active reservations overlapping our window,
+                          // show a non-blocking note next to the line item.
+                          const availabilityRow = dateAvailability?.[String(item.id)];
+                          const datesPicked = !!(formData.pickupDate && formData.returnDate);
+                          const overlapAmount = availabilityRow
+                            ? Math.max(availabilityRow.totalQuantity - availabilityRow.availableQuantity, 0)
+                            : 0;
+                          const showOverlapNote = datesPicked && overlapAmount > 0;
+
+                          return (
+                            <div
+                              key={`cart-${item.id}`}
+                              className="flex flex-col gap-2 bg-green-50 p-3 rounded-lg border border-green-200"
                             >
-                              Remove
-                            </button>
-                          </div>
-                        ))}
+                              <div className="flex items-center gap-3">
+                                {item.image_url && (
+                                  <img
+                                    src={item.image_url}
+                                    alt={item.name}
+                                    className="w-16 h-16 object-cover rounded flex-shrink-0"
+                                  />
+                                )}
+                                <div className="flex-1">
+                                  <h5 className="font-medium text-gray-900">{item.name}</h5>
+                                  <p className="text-sm text-gray-600">
+                                    Quantity: {item.requestedQuantity}
+                                    {availabilityRow && (
+                                      <span className="text-gray-500">
+                                        {' '}• {availabilityRow.availableQuantity} of {availabilityRow.totalQuantity} free for your dates
+                                      </span>
+                                    )}
+                                  </p>
+                                </div>
+                                <button
+                                  onClick={() => removeFromCart(String(item.id))}
+                                  className="text-red-600 hover:text-red-700 text-sm font-medium"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                              {showOverlapNote && formData.pickupDate && formData.returnDate && (
+                                <div className="flex items-start gap-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                                  <Info className="h-3.5 w-3.5 flex-shrink-0 mt-0.5 text-amber-600" />
+                                  <span className="flex-1">
+                                    Heads up: {overlapAmount} {overlapAmount === 1 ? 'unit is' : 'units are'} also reserved for overlapping dates.
+                                  </span>
+                                  <AvailabilityInfo
+                                    itemId={String(item.id)}
+                                    startDate={formData.pickupDate}
+                                    endDate={formData.returnDate}
+                                    label="View"
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                     {cartItems.length > 0 && (

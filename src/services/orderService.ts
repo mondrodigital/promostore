@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase';
-import type { CartItem, PromoItem } from '../types';
+import type { CartItem } from '../types';
 
 export interface OrderFormData {
   name: string;
@@ -10,6 +10,9 @@ export interface OrderFormData {
   eventEndDate: Date | null;
 }
 
+// -----------------------------------------------------------------------------
+// Cart validation result shape (used by HomePage to surface specific messages)
+// -----------------------------------------------------------------------------
 export interface StaleCartItem {
   item: CartItem;
   currentAvailable: number;
@@ -22,6 +25,65 @@ export interface ValidationResult {
   unavailableItems: CartItem[];
 }
 
+// -----------------------------------------------------------------------------
+// Date-aware availability helpers (backed by the new SQL functions)
+// -----------------------------------------------------------------------------
+export interface DateAwareAvailability {
+  itemId: string;
+  totalQuantity: number;
+  availableQuantity: number;
+}
+
+export interface ItemConflictRange {
+  checkoutDate: string;
+  returnDate: string;
+  quantity: number;
+}
+
+// -----------------------------------------------------------------------------
+// create_order_with_checkouts RPC contract
+//
+// The Postgres function returns one of these shapes (see migration
+// 20260516000000_date_aware_availability.sql for the source of truth).
+// -----------------------------------------------------------------------------
+export interface InsufficientStockConflict {
+  item_id: string;
+  item_name: string;
+  requested: number;
+  available: number;
+}
+
+export interface OrderRpcSuccess {
+  success: true;
+  order_id: string;
+  order_number: string;
+  message: string;
+}
+
+export interface OrderRpcInsufficientStock {
+  success: false;
+  code: 'INSUFFICIENT_STOCK';
+  message: string;
+  conflicts: InsufficientStockConflict[];
+}
+
+export type OrderRpcResponse = OrderRpcSuccess | OrderRpcInsufficientStock;
+
+/**
+ * Thrown by createOrderAtomic when the RPC reports stock conflicts. Carries the
+ * structured `conflicts` array so the caller can render per-item messaging.
+ */
+export class InsufficientStockError extends Error {
+  readonly code = 'INSUFFICIENT_STOCK' as const;
+  readonly conflicts: InsufficientStockConflict[];
+
+  constructor(message: string, conflicts: InsufficientStockConflict[]) {
+    super(message);
+    this.name = 'InsufficientStockError';
+    this.conflicts = conflicts;
+  }
+}
+
 function formatDateLocal(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -29,40 +91,119 @@ function formatDateLocal(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+// -----------------------------------------------------------------------------
+// Bulk date-aware availability (powers Inventory cards + cart pre-validation)
+// -----------------------------------------------------------------------------
+export async function fetchAvailabilityForDates(
+  itemIds: string[],
+  startDate: Date,
+  endDate: Date
+): Promise<DateAwareAvailability[]> {
+  if (itemIds.length === 0) return [];
+
+  const { data, error } = await supabase.rpc('get_available_quantities_bulk', {
+    p_item_ids: itemIds,
+    p_start: formatDateLocal(startDate),
+    p_end: formatDateLocal(endDate),
+  });
+
+  if (error) {
+    throw new Error(`Failed to fetch availability: ${error.message}`);
+  }
+
+  return (data ?? []).map((row: { item_id: string; total_quantity: number; available_quantity: number }) => ({
+    itemId: row.item_id,
+    totalQuantity: row.total_quantity,
+    availableQuantity: row.available_quantity,
+  }));
+}
+
+// -----------------------------------------------------------------------------
+// Per-item conflict ranges (powers #18 "why unavailable" and #9 overlap notes).
+// Returns ONLY dates + aggregated quantity, never user/order identifiers.
+// -----------------------------------------------------------------------------
+export async function fetchItemConflicts(
+  itemId: string,
+  startDate: Date,
+  endDate: Date
+): Promise<ItemConflictRange[]> {
+  const { data, error } = await supabase.rpc('get_item_conflicts', {
+    p_item_id: itemId,
+    p_start: formatDateLocal(startDate),
+    p_end: formatDateLocal(endDate),
+  });
+
+  if (error) {
+    throw new Error(`Failed to fetch conflicts: ${error.message}`);
+  }
+
+  return (data ?? []).map((row: { checkout_date: string; return_date: string; quantity: number }) => ({
+    checkoutDate: row.checkout_date,
+    returnDate: row.return_date,
+    quantity: row.quantity,
+  }));
+}
+
 /**
  * Validates that all cart items are still available with requested quantities
+ * for the chosen pickup/return window. Falls back to the static
+ * `available_quantity` snapshot only when no dates have been selected yet
+ * (e.g. very early in the flow before dates are picked).
  */
-export async function validateCartAvailability(cartItems: CartItem[]): Promise<ValidationResult> {
+export async function validateCartAvailability(
+  cartItems: CartItem[],
+  pickupDate?: Date | null,
+  returnDate?: Date | null
+): Promise<ValidationResult> {
   if (cartItems.length === 0) {
     return { isValid: true, staleItems: [], unavailableItems: [] };
   }
 
-  const itemIds = cartItems.map(item => item.id);
-  
-  const { data: currentItems, error } = await supabase
-    .from('promo_items')
-    .select('id, available_quantity, name')
-    .in('id', itemIds);
+  const itemIds = cartItems.map(item => String(item.id));
 
-  if (error) {
-    throw new Error(`Failed to validate cart: ${error.message}`);
+  type AvailabilityRow = { id: string; available: number; total: number };
+  let availabilityRows: AvailabilityRow[];
+
+  if (pickupDate && returnDate) {
+    const dateAware = await fetchAvailabilityForDates(itemIds, pickupDate, returnDate);
+    availabilityRows = dateAware.map(row => ({
+      id: row.itemId,
+      available: row.availableQuantity,
+      total: row.totalQuantity,
+    }));
+  } else {
+    // Pre-date fallback: use the legacy static snapshot.
+    const { data: currentItems, error } = await supabase
+      .from('promo_items')
+      .select('id, available_quantity, total_quantity')
+      .in('id', itemIds);
+
+    if (error) {
+      throw new Error(`Failed to validate cart: ${error.message}`);
+    }
+
+    availabilityRows = (currentItems ?? []).map(item => ({
+      id: item.id,
+      available: item.available_quantity,
+      total: item.total_quantity,
+    }));
   }
 
   const staleItems: StaleCartItem[] = [];
   const unavailableItems: CartItem[] = [];
 
   cartItems.forEach(cartItem => {
-    const currentItem = currentItems?.find(item => item.id === cartItem.id);
-    
+    const currentItem = availabilityRows.find(item => item.id === String(cartItem.id));
+
     if (!currentItem) {
       unavailableItems.push(cartItem);
-    } else if (currentItem.available_quantity === 0) {
+    } else if (currentItem.available <= 0) {
       unavailableItems.push(cartItem);
-    } else if (currentItem.available_quantity < cartItem.requestedQuantity) {
+    } else if (currentItem.available < cartItem.requestedQuantity) {
       staleItems.push({
         item: cartItem,
-        currentAvailable: currentItem.available_quantity,
-        requestedQuantity: cartItem.requestedQuantity
+        currentAvailable: currentItem.available,
+        requestedQuantity: cartItem.requestedQuantity,
       });
     }
   });
@@ -70,13 +211,18 @@ export async function validateCartAvailability(cartItems: CartItem[]): Promise<V
   return {
     isValid: staleItems.length === 0 && unavailableItems.length === 0,
     staleItems,
-    unavailableItems
+    unavailableItems,
   };
 }
 
 /**
  * Creates an order with checkouts atomically via a single database RPC.
- * Validates inventory, creates checkouts, and decrements quantities in one transaction.
+ *
+ * Throws:
+ *   - InsufficientStockError when the server detects a date-aware stock
+ *     conflict (issue #14). Caller should branch on this and surface a
+ *     per-item adjusted-cart message (issue #17).
+ *   - Error for any other failure (validation / network / etc.)
  */
 export async function createOrderAtomic(
   formData: OrderFormData,
@@ -85,7 +231,7 @@ export async function createOrderAtomic(
 ): Promise<{ orderId: string; orderNumber: string | null }> {
   const items = cartItems.map(item => ({
     item_id: item.id,
-    quantity: item.requestedQuantity
+    quantity: item.requestedQuantity,
   }));
 
   const { data, error } = await supabase.rpc('create_order_with_checkouts', {
@@ -96,20 +242,29 @@ export async function createOrderAtomic(
     p_event_start_date: formData.eventStartDate ? formatDateLocal(formData.eventStartDate) : null,
     p_event_end_date: formData.eventEndDate ? formatDateLocal(formData.eventEndDate) : null,
     p_items: items,
-    p_status: status
+    p_status: status,
   });
 
   if (error) {
     throw new Error(`Order creation failed: ${error.message}`);
   }
 
-  if (data && data.success === false) {
-    throw new Error(data.message || 'Order creation failed');
+  const response = data as OrderRpcResponse | null;
+
+  if (!response) {
+    throw new Error('Order creation failed: empty response from server');
+  }
+
+  if (response.success === false) {
+    if (response.code === 'INSUFFICIENT_STOCK') {
+      throw new InsufficientStockError(response.message, response.conflicts ?? []);
+    }
+    throw new Error(response.message || 'Order creation failed');
   }
 
   return {
-    orderId: data.order_id,
-    orderNumber: data.order_number || null
+    orderId: response.order_id,
+    orderNumber: response.order_number || null,
   };
 }
 
@@ -131,7 +286,7 @@ export async function saveWishlistItems(
     requested_return_date: formatDateLocal(formData.returnDate!),
     event_start_date: formatDateLocal(formData.eventStartDate!),
     event_end_date: formatDateLocal(formData.eventEndDate!),
-    status: 'pending'
+    status: 'pending',
   }));
 
   const { error: wishlistError } = await supabase.rpc(
@@ -163,7 +318,7 @@ export async function sendOrderNotifications(
     eventStartDate: formData.eventStartDate?.toLocaleDateString(),
     eventEndDate: formData.eventEndDate?.toLocaleDateString(),
     checkedOutItems: cartItems.map(item => ({ name: item.name, quantity: item.requestedQuantity })),
-    wishlistItems: wishlistItems.map(item => ({ name: item.name, quantity: item.requestedQuantity }))
+    wishlistItems: wishlistItems.map(item => ({ name: item.name, quantity: item.requestedQuantity })),
   };
 
   try {
@@ -194,7 +349,7 @@ export async function sendPowerAutomateWebhook(
     pickupDate: formData.pickupDate ? formatDateLocal(formData.pickupDate) : null,
     returnDate: formData.returnDate ? formatDateLocal(formData.returnDate) : null,
     eventStartDate: formData.eventStartDate ? formatDateLocal(formData.eventStartDate) : null,
-    eventEndDate: formData.eventEndDate ? formatDateLocal(formData.eventEndDate) : null
+    eventEndDate: formData.eventEndDate ? formatDateLocal(formData.eventEndDate) : null,
   };
 
   try {
