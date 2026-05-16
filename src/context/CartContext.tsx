@@ -1,5 +1,6 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import type { PromoItem, CartItem } from '../types';
+import { useToast } from './ToastContext';
 
 interface CartContextType {
   items: CartItem[];
@@ -19,55 +20,104 @@ interface CartContextType {
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
 
-const CART_STORAGE_KEY = 'promo_inventory_cart';
+const CART_VERSION = 1;
+const CART_STORAGE_KEY = 'lo_cart_v1';
+const WISHLIST_STORAGE_KEY = 'lo_wishlist_v1';
+const CART_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
-// Helper to load from session storage
-const loadFromSession = <T,>(key: string, defaultValue: T): T => {
+interface StoredCart {
+  version: number;
+  items: CartItem[];
+  savedAt: string;
+}
+
+function loadFromLocalStorage(key: string): { items: CartItem[]; expired: boolean } {
   try {
-    const stored = sessionStorage.getItem(key);
-    return stored ? JSON.parse(stored) : defaultValue;
+    const stored = localStorage.getItem(key);
+    if (!stored) return { items: [], expired: false };
+
+    const parsed: StoredCart = JSON.parse(stored);
+
+    if (parsed.version !== CART_VERSION) {
+      localStorage.removeItem(key);
+      return { items: [], expired: true };
+    }
+
+    const savedAt = new Date(parsed.savedAt).getTime();
+    if (isNaN(savedAt) || Date.now() - savedAt > CART_TTL_MS) {
+      localStorage.removeItem(key);
+      return { items: [], expired: true };
+    }
+
+    return { items: Array.isArray(parsed.items) ? parsed.items : [], expired: false };
   } catch (error) {
-    console.error(`Error reading sessionStorage key \"${key}\":`, error);
-    return defaultValue;
+    console.error(`Error reading localStorage key "${key}":`, error);
+    return { items: [], expired: false };
   }
-};
+}
+
+function saveToLocalStorage(key: string, items: CartItem[]): void {
+  try {
+    const payload: StoredCart = {
+      version: CART_VERSION,
+      items,
+      savedAt: new Date().toISOString(),
+    };
+    localStorage.setItem(key, JSON.stringify(payload));
+  } catch (error) {
+    console.error(`Error writing to localStorage key "${key}":`, error);
+  }
+}
 
 export function CartProvider({ children }: { children: React.ReactNode }) {
-  const [items, setItems] = useState<CartItem[]>(() => loadFromSession<CartItem[]>('cartItems', []));
-  const [wishlistItems, setWishlistItems] = useState<CartItem[]>(() => loadFromSession<CartItem[]>('wishlistItems', []));
+  const { showWarning } = useToast();
 
-  // Save cart items to session storage whenever they change
+  // Track whether either store was discarded as expired, resolved during the
+  // synchronous initializer before the component first renders.
+  const cartExpiredRef = useRef(false);
+  const wishlistExpiredRef = useRef(false);
+
+  const [items, setItems] = useState<CartItem[]>(() => {
+    const { items: stored, expired } = loadFromLocalStorage(CART_STORAGE_KEY);
+    if (expired) cartExpiredRef.current = true;
+    return stored;
+  });
+
+  const [wishlistItems, setWishlistItems] = useState<CartItem[]>(() => {
+    const { items: stored, expired } = loadFromLocalStorage(WISHLIST_STORAGE_KEY);
+    if (expired) wishlistExpiredRef.current = true;
+    return stored;
+  });
+
+  // Show a single toast if either cart or wishlist was discarded as expired.
   useEffect(() => {
-    try {
-      sessionStorage.setItem('cartItems', JSON.stringify(items));
-    } catch (error) {
-      console.error('Error writing cartItems to sessionStorage:', error);
+    if (cartExpiredRef.current || wishlistExpiredRef.current) {
+      showWarning('Your previous cart has expired');
+      cartExpiredRef.current = false;
+      wishlistExpiredRef.current = false;
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    saveToLocalStorage(CART_STORAGE_KEY, items);
   }, [items]);
 
-  // Save wishlist items to session storage whenever they change
   useEffect(() => {
-    try {
-      sessionStorage.setItem('wishlistItems', JSON.stringify(wishlistItems));
-    } catch (error) {
-      console.error('Error writing wishlistItems to sessionStorage:', error);
-    }
+    saveToLocalStorage(WISHLIST_STORAGE_KEY, wishlistItems);
   }, [wishlistItems]);
 
   const addToCart = useCallback((item: PromoItem, quantity: number) => {
     setItems(prevItems => {
       const existingItem = prevItems.find(i => String(i.id) === String(item.id));
       if (existingItem) {
-        // Update quantity if item already exists
         return prevItems.map(i =>
           String(i.id) === String(item.id)
             ? { ...i, requestedQuantity: i.requestedQuantity + quantity }
             : i
         );
-      } else {
-        // Add new item to cart
-        return [...prevItems, { ...item, requestedQuantity: quantity }];
       }
+      return [...prevItems, { ...item, requestedQuantity: quantity }];
     });
   }, []);
 
@@ -77,16 +127,18 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
   const clearCart = useCallback(() => {
     setItems([]);
-    sessionStorage.removeItem('cartItems'); // Clear storage too
+    localStorage.removeItem(CART_STORAGE_KEY);
   }, []);
 
   const updateQuantity = (itemId: string, quantity: number) => {
     setItems(currentItems =>
-      currentItems.map(item =>
-        String(item.id) === itemId // Compare as strings
-          ? { ...item, requestedQuantity: quantity > 0 ? quantity : 0 } // Ensure quantity doesn't go below 0
-          : item
-      ).filter(item => item.requestedQuantity > 0) // Remove item if quantity is 0
+      currentItems
+        .map(item =>
+          String(item.id) === itemId
+            ? { ...item, requestedQuantity: quantity > 0 ? quantity : 0 }
+            : item
+        )
+        .filter(item => item.requestedQuantity > 0)
     );
   };
 
@@ -104,16 +156,13 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     setWishlistItems(prevItems => {
       const existingItem = prevItems.find(i => String(i.id) === String(item.id));
       if (existingItem) {
-        // Update quantity if item already exists
         return prevItems.map(i =>
           String(i.id) === String(item.id)
             ? { ...i, requestedQuantity: i.requestedQuantity + quantity }
             : i
         );
-      } else {
-        // Add new item to wishlist
-        return [...prevItems, { ...item, requestedQuantity: quantity }];
       }
+      return [...prevItems, { ...item, requestedQuantity: quantity }];
     });
   }, []);
 
@@ -123,7 +172,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
   const clearWishlist = useCallback(() => {
     setWishlistItems([]);
-    sessionStorage.removeItem('wishlistItems'); // Clear storage too
+    localStorage.removeItem(WISHLIST_STORAGE_KEY);
   }, []);
 
   const getWishlistItemQuantity = useCallback((itemId: string): number => {
@@ -131,11 +180,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     return item ? item.requestedQuantity : 0;
   }, [wishlistItems]);
 
-   const getTotalWishlistQuantity = useCallback((): number => {
+  const getTotalWishlistQuantity = useCallback((): number => {
     return wishlistItems.reduce((total, item) => total + item.requestedQuantity, 0);
   }, [wishlistItems]);
 
-  // Updated context value
   const value: CartContextType = {
     items,
     addToCart,
@@ -158,7 +206,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 export function useCart(): CartContextType {
   const context = useContext(CartContext);
   if (context === undefined) {
-    throw new Error('useCart must be used within an CartProvider');
+    throw new Error('useCart must be used within a CartProvider');
   }
   return context;
 }
