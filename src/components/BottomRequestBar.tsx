@@ -1,10 +1,15 @@
 import React, { useState } from 'react';
 import DatePicker from 'react-datepicker';
-import { format } from 'date-fns';
+import { format, addDays } from 'date-fns';
 import { X, ShoppingCart, ChevronUp, ChevronDown, AlertCircle, History } from 'lucide-react';
 import type { CartItem } from '../types';
 import OrderHistoryModal from './OrderHistoryModal';
 import { useGuestUser } from '../context/GuestUserContext';
+
+// Maximum allowed days between pickup and return.
+// Keep in sync with the `max_checkout_days` row in `app_config` and the
+// CHECK constraint `chk_max_checkout_duration` on the `orders` table.
+const MAX_CHECKOUT_DAYS = 14;
 
 interface BottomRequestBarProps {
   formData: {
@@ -20,6 +25,8 @@ interface BottomRequestBarProps {
   onPickupReturnDateChange: (dates: [Date | null, Date | null]) => void;
   onSubmit: () => void;
   isSubmitting: boolean;
+  /** Seconds remaining in the post-submission cooldown period (0 = not cooling down). */
+  submitCooldown?: number;
   cartItems: CartItem[];
   removeFromCart: (itemId: string) => void;
   clearCart: () => void;
@@ -36,6 +43,7 @@ export default function BottomRequestBar({
   onPickupReturnDateChange,
   onSubmit,
   isSubmitting,
+  submitCooldown = 0,
   cartItems,
   removeFromCart,
   clearCart,
@@ -49,6 +57,7 @@ export default function BottomRequestBar({
   const [modalType, setModalType] = useState<'event' | 'pickup' | 'cart' | 'email_prompt' | null>(null);
   const [showOrderHistory, setShowOrderHistory] = useState(false);
   const [emailPromptInput, setEmailPromptInput] = useState('');
+  const [dateErrors, setDateErrors] = useState<{ eventDates?: string; pickupDates?: string }>({});
   const { guestEmail, setGuestEmail, clearGuestEmail } = useGuestUser();
 
   const totalCartQuantity = getTotalQuantity();
@@ -66,8 +75,46 @@ export default function BottomRequestBar({
     );
   };
 
+  /**
+   * Validates cross-field date relationships (issues #6 and #11).
+   * Returns an error map; empty object means all checks passed.
+   */
+  const validateDateRelationships = (): { eventDates?: string; pickupDates?: string } => {
+    const errors: { eventDates?: string; pickupDates?: string } = {};
+    const { pickupDate, returnDate, eventStartDate, eventEndDate } = formData;
+
+    // #11 – Maximum checkout window
+    if (pickupDate && returnDate) {
+      const diffDays = Math.round(
+        (returnDate.getTime() - pickupDate.getTime()) / (1000 * 60 * 60 * 24),
+      );
+      if (diffDays > MAX_CHECKOUT_DAYS) {
+        errors.pickupDates = `Return date is ${diffDays} days after pickup. The maximum checkout window is ${MAX_CHECKOUT_DAYS} days.`;
+      }
+    }
+
+    // #6 – Pickup must be on or before event start
+    if (pickupDate && eventStartDate && pickupDate > eventStartDate) {
+      errors.pickupDates = errors.pickupDates
+        ? `${errors.pickupDates} Also, pickup must be on or before the event start date.`
+        : 'Pickup date must be on or before the event start date.';
+    }
+
+    // #6 – Return must be on or after event end
+    if (returnDate && eventEndDate && returnDate < eventEndDate) {
+      const field = errors.pickupDates ? 'pickupDates' : 'pickupDates';
+      errors[field] = errors.pickupDates
+        ? `${errors.pickupDates} Also, return date must be on or after the event end date.`
+        : 'Return date must be on or after the event end date.';
+    }
+
+    return errors;
+  };
+
   // Handle request items button click
   const handleRequestClick = () => {
+    if (submitCooldown > 0) return;
+
     if (totalItems === 0) {
       alert('Please add items to your cart or wishlist before submitting.');
       return;
@@ -79,7 +126,15 @@ export default function BottomRequestBar({
       return;
     }
 
-    // Form is complete, submit the order
+    // Cross-validate date relationships before submitting
+    const crossErrors = validateDateRelationships();
+    if (Object.keys(crossErrors).length > 0) {
+      setDateErrors(crossErrors);
+      setIsExpanded(true);
+      return;
+    }
+
+    setDateErrors({});
     onSubmit();
   };
 
@@ -87,8 +142,10 @@ export default function BottomRequestBar({
   const handleModalDateChange = (dates: [Date | null, Date | null]) => {
     if (modalType === 'event') {
       onEventDateChange(dates);
+      setDateErrors(prev => ({ ...prev, eventDates: undefined }));
     } else if (modalType === 'pickup') {
       onPickupReturnDateChange(dates);
+      setDateErrors(prev => ({ ...prev, pickupDates: undefined }));
     }
     const [start, end] = dates;
     if (start && end) {
@@ -195,11 +252,15 @@ export default function BottomRequestBar({
                 </button>
                 <button
                   onClick={handleRequestClick}
-                  disabled={isSubmitting || totalItems === 0}
+                  disabled={isSubmitting || submitCooldown > 0 || totalItems === 0}
                   className="bg-[#0075AE] text-white px-6 py-2.5 rounded-lg font-medium hover:bg-[#005f8c] disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
                 >
                   <span className="text-sm sm:text-base">
-                    {isSubmitting ? 'Submitting...' : 'Request Items'}
+                    {isSubmitting
+                      ? 'Submitting...'
+                      : submitCooldown > 0
+                      ? `Wait ${submitCooldown}s…`
+                      : 'Request Items'}
                   </span>
                 </button>
               </div>
@@ -283,7 +344,8 @@ export default function BottomRequestBar({
                     type="button"
                     onClick={() => setModalType('event')}
                     className={`w-full px-3 py-2 border rounded-lg text-left focus:ring-2 focus:ring-[#0075AE] focus:border-transparent outline-none ${
-                      showValidation && (!formData.eventStartDate || !formData.eventEndDate)
+                      (showValidation && (!formData.eventStartDate || !formData.eventEndDate)) ||
+                      dateErrors.eventDates
                         ? 'border-red-300 bg-red-50'
                         : 'border-gray-300'
                     } ${formData.eventStartDate ? 'text-gray-900' : 'text-gray-400'}`}
@@ -294,18 +356,26 @@ export default function BottomRequestBar({
                         }`
                       : 'Select event dates'}
                   </button>
+                  {dateErrors.eventDates && (
+                    <p className="mt-1 text-xs text-red-600 flex items-start gap-1">
+                      <AlertCircle className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                      {dateErrors.eventDates}
+                    </p>
+                  )}
                 </div>
 
                 {/* Pickup & Return Dates */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Pickup & Return Dates <span className="text-red-500">*</span>
+                    <span className="ml-1 font-normal text-gray-400">(max {MAX_CHECKOUT_DAYS} days)</span>
                   </label>
                   <button
                     type="button"
                     onClick={() => setModalType('pickup')}
                     className={`w-full px-3 py-2 border rounded-lg text-left focus:ring-2 focus:ring-[#0075AE] focus:border-transparent outline-none ${
-                      showValidation && (!formData.pickupDate || !formData.returnDate)
+                      (showValidation && (!formData.pickupDate || !formData.returnDate)) ||
+                      dateErrors.pickupDates
                         ? 'border-red-300 bg-red-50'
                         : 'border-gray-300'
                     } ${formData.pickupDate ? 'text-gray-900' : 'text-gray-400'}`}
@@ -316,6 +386,12 @@ export default function BottomRequestBar({
                         }`
                       : 'Select pickup & return dates'}
                   </button>
+                  {dateErrors.pickupDates && (
+                    <p className="mt-1 text-xs text-red-600 flex items-start gap-1">
+                      <AlertCircle className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                      {dateErrors.pickupDates}
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -341,10 +417,14 @@ export default function BottomRequestBar({
               {/* Submit Button */}
               <button
                 onClick={handleRequestClick}
-                disabled={isSubmitting || totalItems === 0}
+                disabled={isSubmitting || submitCooldown > 0 || totalItems === 0}
                 className="w-full bg-[#0075AE] text-white px-6 py-3 rounded-lg font-medium hover:bg-[#005f8c] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                {isSubmitting ? 'Submitting Request...' : 'Submit Request'}
+                {isSubmitting
+                  ? 'Submitting Request...'
+                  : submitCooldown > 0
+                  ? `Please wait ${submitCooldown}s before resubmitting…`
+                  : 'Submit Request'}
               </button>
 
               <p className="text-xs text-gray-500 text-center mt-2">
@@ -388,8 +468,23 @@ export default function BottomRequestBar({
                     inline
                     monthsShown={2}
                     minDate={new Date()}
+                    // #11: When selecting pickup/return, disable any return date that would
+                    // exceed MAX_CHECKOUT_DAYS from the currently selected pickup date.
+                    maxDate={
+                      modalType === 'pickup' && formData.pickupDate
+                        ? addDays(formData.pickupDate, MAX_CHECKOUT_DAYS)
+                        : undefined
+                    }
                   />
                 </div>
+                {modalType === 'pickup' && (
+                  <p className="mt-3 text-xs text-gray-500 text-center">
+                    Maximum checkout window: {MAX_CHECKOUT_DAYS} days (pickup to return).
+                    {formData.pickupDate && (
+                      <> Latest return: <strong>{format(addDays(formData.pickupDate, MAX_CHECKOUT_DAYS), 'MMM d, yyyy')}</strong>.</>
+                    )}
+                  </p>
+                )}
               </>
             )}
 

@@ -19,6 +19,10 @@ import {
   type OrderFormData
 } from '../services/orderService';
 
+// Seconds to disable the submit button after any submission attempt (success or failure).
+// Prevents accidental double-clicks and rapid-fire retries from the UI.
+const SUBMIT_COOLDOWN_SECONDS = 5;
+
 type Category = 'All' | 'Tents' | 'Tables' | 'Linens' | 'Displays' | 'Decor' | 'Games' | 'Misc';
 
 
@@ -28,6 +32,11 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitCooldown, setSubmitCooldown] = useState(0);
+  // Idempotency key: generated fresh when the component mounts and reset only
+  // after a successful order. If the user retries before success (network hiccup,
+  // double-click bypass), the server returns the existing order instead of a dup.
+  const [idempotencyKey, setIdempotencyKey] = useState<string>(() => crypto.randomUUID());
   const { guestEmail, setGuestEmail } = useGuestUser();
   const { showSuccess, showError, showWarning, showInfo } = useToast();
   const { 
@@ -53,6 +62,15 @@ export default function HomePage() {
   const [activeFilter, setActiveFilter] = useState<Category>('All');
   const [isBannerVisible, setIsBannerVisible] = useState(true);
   const submittingRef = useRef(false);
+
+  // Countdown tick for post-submission cooldown
+  useEffect(() => {
+    if (submitCooldown <= 0) return;
+    const timer = setInterval(() => {
+      setSubmitCooldown(prev => Math.max(0, prev - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [submitCooldown]);
 
   const validateEmail = (email: string) => {
     return email.toLowerCase().endsWith('@vellummortgage.com');
@@ -97,7 +115,8 @@ export default function HomePage() {
   }, [guestEmail]);
 
   const handleSubmit = async () => {
-    if (submittingRef.current) return;
+    // Guard: ignore if already submitting or in cooldown period
+    if (submittingRef.current || submitCooldown > 0) return;
 
     if (!formData.name || !formData.email || !formData.pickupDate || !formData.returnDate || !formData.eventStartDate || !formData.eventEndDate) {
       showError('Please fill in all required fields');
@@ -114,6 +133,8 @@ export default function HomePage() {
       return;
     }
 
+    // Lock submission immediately — before any async work — so concurrent
+    // calls (e.g., double-click bypass) are dropped at the top of this guard.
     submittingRef.current = true;
     setIsSubmitting(true);
     setError(null);
@@ -169,12 +190,12 @@ export default function HomePage() {
       let wishlistSaved = false;
 
       if (cartItems.length > 0) {
-        const orderResult = await createOrderAtomic(orderFormData, cartItems, 'pending');
+        const orderResult = await createOrderAtomic(orderFormData, cartItems, 'pending', idempotencyKey);
         orderId = orderResult.orderId;
         orderNumber = orderResult.orderNumber;
         orderSuccessful = true;
       } else if (wishlistItems.length > 0) {
-        const orderResult = await createOrderAtomic(orderFormData, [], 'wishlist_only');
+        const orderResult = await createOrderAtomic(orderFormData, [], 'wishlist_only', idempotencyKey);
         orderId = orderResult.orderId;
         orderNumber = orderResult.orderNumber;
       }
@@ -201,6 +222,11 @@ export default function HomePage() {
       clearWishlist();
       await fetchItems();
 
+      // Rotate idempotency key only after a confirmed successful submission.
+      // Any retry before this point reuses the same key, so the server will
+      // return the existing order rather than creating a duplicate.
+      setIdempotencyKey(crypto.randomUUID());
+
       if (orderSuccessful && wishlistSaved) {
         showSuccess('Order submitted and wishlist request saved! Check your email for confirmation.');
       } else if (orderSuccessful) {
@@ -215,6 +241,9 @@ export default function HomePage() {
     } finally {
       setIsSubmitting(false);
       submittingRef.current = false;
+      // Start cooldown after every attempt (success or failure).
+      // The UI shows a countdown so users know when they can resubmit.
+      setSubmitCooldown(SUBMIT_COOLDOWN_SECONDS);
     }
   };
 
@@ -470,6 +499,7 @@ export default function HomePage() {
         onPickupReturnDateChange={handlePickupReturnDateChange}
         onSubmit={handleSubmit}
         isSubmitting={isSubmitting}
+        submitCooldown={submitCooldown}
         cartItems={cartItems}
         removeFromCart={removeFromCart}
         clearCart={clearCart}

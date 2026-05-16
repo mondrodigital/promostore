@@ -77,11 +77,16 @@ export async function validateCartAvailability(cartItems: CartItem[]): Promise<V
 /**
  * Creates an order with checkouts atomically via a single database RPC.
  * Validates inventory, creates checkouts, and decrements quantities in one transaction.
+ *
+ * @param idempotencyKey - A UUID generated per cart-modal session. If the same key
+ *   is submitted twice (e.g. a network retry), the RPC returns the existing order
+ *   instead of creating a duplicate. Reset only after a successful submission.
  */
 export async function createOrderAtomic(
   formData: OrderFormData,
   cartItems: CartItem[],
-  status: 'pending' | 'wishlist_only' = 'pending'
+  status: 'pending' | 'wishlist_only' = 'pending',
+  idempotencyKey?: string,
 ): Promise<{ orderId: string; orderNumber: string | null }> {
   const items = cartItems.map(item => ({
     item_id: item.id,
@@ -96,7 +101,8 @@ export async function createOrderAtomic(
     p_event_start_date: formData.eventStartDate ? formatDateLocal(formData.eventStartDate) : null,
     p_event_end_date: formData.eventEndDate ? formatDateLocal(formData.eventEndDate) : null,
     p_items: items,
-    p_status: status
+    p_status: status,
+    p_idempotency_key: idempotencyKey ?? null,
   });
 
   if (error) {
