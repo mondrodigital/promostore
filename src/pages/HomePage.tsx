@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
+import { format } from 'date-fns';
 import { supabase } from '../lib/supabase';
-import { Package2, X, CalendarRange } from 'lucide-react';
+import { Package2, X } from 'lucide-react';
 import { useCart } from '../context/CartContext';
 import { useGuestUser } from '../context/GuestUserContext';
 import { useToast } from '../context/ToastContext';
@@ -11,6 +12,7 @@ import SimpleNavbar from '../components/SimpleNavbar';
 import BottomRequestBar from '../components/BottomRequestBar';
 import ItemFilterBar from '../components/ItemFilterBar';
 import AvailabilityInfo from '../components/AvailabilityInfo';
+import EventDetailsModal, { type EventDetailsFormData } from '../components/EventDetailsModal';
 import {
   validateCartAvailability,
   createOrderAtomic,
@@ -27,6 +29,79 @@ import {
 // Prevents accidental double-clicks and rapid-fire retries from the UI.
 const SUBMIT_COOLDOWN_SECONDS = 5;
 
+// sessionStorage key for the upfront event-details form. Persists across
+// navigation/refresh within the same browser session so users aren't
+// re-prompted every refresh, but a fresh session re-prompts them.
+const EVENT_DETAILS_SESSION_KEY = 'vellum_event_details_session';
+
+type StoredEventDetails = {
+  name?: string;
+  email?: string;
+  eventStartDate?: string | null;
+  eventEndDate?: string | null;
+  pickupDate?: string | null;
+  returnDate?: string | null;
+};
+
+const startOfToday = () => {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+
+const reviveDate = (iso: string | null | undefined): Date | null => {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+const loadStoredEventDetails = (): EventDetailsFormData | null => {
+  try {
+    const raw = sessionStorage.getItem(EVENT_DETAILS_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StoredEventDetails;
+    return {
+      name: parsed.name ?? '',
+      email: parsed.email ?? '',
+      eventStartDate: reviveDate(parsed.eventStartDate),
+      eventEndDate: reviveDate(parsed.eventEndDate),
+      pickupDate: reviveDate(parsed.pickupDate),
+      returnDate: reviveDate(parsed.returnDate),
+    };
+  } catch (err) {
+    console.error('Failed to load stored event details', err);
+    return null;
+  }
+};
+
+const persistEventDetails = (values: EventDetailsFormData) => {
+  try {
+    const payload: StoredEventDetails = {
+      name: values.name,
+      email: values.email,
+      eventStartDate: values.eventStartDate?.toISOString() ?? null,
+      eventEndDate: values.eventEndDate?.toISOString() ?? null,
+      pickupDate: values.pickupDate?.toISOString() ?? null,
+      returnDate: values.returnDate?.toISOString() ?? null,
+    };
+    sessionStorage.setItem(EVENT_DETAILS_SESSION_KEY, JSON.stringify(payload));
+  } catch (err) {
+    console.error('Failed to persist event details', err);
+  }
+};
+
+/** Clears only date fields in session; name/email are kept for the next request. */
+const clearStoredEventDates = (profile: Pick<EventDetailsFormData, 'name' | 'email'>) => {
+  persistEventDetails({
+    name: profile.name,
+    email: profile.email,
+    eventStartDate: null,
+    eventEndDate: null,
+    pickupDate: null,
+    returnDate: null,
+  });
+};
+
 type Category = 'All' | 'Tents' | 'Tables' | 'Linens' | 'Displays' | 'Decor' | 'Games' | 'Misc';
 
 
@@ -41,7 +116,7 @@ export default function HomePage() {
   // after a successful order. If the user retries before success (network hiccup,
   // double-click bypass), the server returns the existing order instead of a dup.
   const [idempotencyKey, setIdempotencyKey] = useState<string>(() => crypto.randomUUID());
-  const { guestEmail, setGuestEmail } = useGuestUser();
+  const { guestEmail, guestName, setGuestEmail, setGuestName } = useGuestUser();
   const { showSuccess, showError, showWarning, showInfo } = useToast();
   const { 
     items: cartItems, 
@@ -55,17 +130,23 @@ export default function HomePage() {
     removeFromWishlist,
     clearWishlist
   } = useCart();
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<EventDetailsFormData>({
     name: '',
     email: '',
-    pickupDate: null as Date | null,
-    returnDate: null as Date | null,
-    eventStartDate: null as Date | null,
-    eventEndDate: null as Date | null
+    pickupDate: null,
+    returnDate: null,
+    eventStartDate: null,
+    eventEndDate: null,
   });
   const [activeFilter, setActiveFilter] = useState<Category>('All');
   const [isBannerVisible, setIsBannerVisible] = useState(true);
   const submittingRef = useRef(false);
+
+  // Controls the upfront event-details popup. `required` blocks the storefront
+  // until the user fills it in; `edit` lets them tweak details later.
+  const [eventDetailsModalMode, setEventDetailsModalMode] = useState<
+    'closed' | 'required' | 'edit'
+  >('closed');
 
   // Map of item_id -> date-aware availability for the chosen [pickup, return]
   // window. Empty until the user picks both dates.
@@ -111,17 +192,50 @@ export default function HomePage() {
       setIsBannerVisible(false);
     }
     fetchItems();
-  }, []);
 
-  // Auto-fill email from cached guest email
-  useEffect(() => {
-    if (guestEmail && !formData.email) {
+    // Rehydrate event details from session, treating stale (past pickup) data
+    // as missing so we re-prompt rather than show a useless date.
+    const stored = loadStoredEventDetails();
+    const today = startOfToday();
+    const hasFreshDates =
+      !!stored?.pickupDate &&
+      !!stored.returnDate &&
+      stored.pickupDate >= today;
+
+    const profileName = stored?.name || guestName || '';
+    const profileEmail = stored?.email || guestEmail || '';
+
+    if (stored && hasFreshDates) {
+      setFormData({
+        name: profileName,
+        email: profileEmail,
+        eventStartDate: stored.eventStartDate,
+        eventEndDate: stored.eventEndDate,
+        pickupDate: stored.pickupDate,
+        returnDate: stored.returnDate,
+      });
+    } else {
       setFormData(prev => ({
         ...prev,
-        email: guestEmail,
+        name: profileName || prev.name,
+        email: profileEmail || prev.email,
+        eventStartDate: null,
+        eventEndDate: null,
+        pickupDate: null,
+        returnDate: null,
       }));
+      setEventDetailsModalMode('required');
     }
-  }, [guestEmail]);
+  }, []);
+
+  // Auto-fill name/email from local profile cache when context hydrates after mount.
+  useEffect(() => {
+    setFormData(prev => ({
+      ...prev,
+      name: prev.name || guestName || '',
+      email: prev.email || guestEmail || '',
+    }));
+  }, [guestName, guestEmail]);
 
   // Refresh date-aware availability whenever pickup/return dates or the item
   // list change. When dates are not both selected, clear the map so the UI
@@ -308,11 +422,22 @@ export default function HomePage() {
         }
       }
 
-      if (guestEmail !== formData.email) {
-        setGuestEmail(formData.email);
-      }
+      const profileName = formData.name.trim();
+      const profileEmail = formData.email.trim();
+      if (profileName) setGuestName(profileName);
+      if (profileEmail) setGuestEmail(profileEmail);
 
-      setFormData({ name: '', email: '', pickupDate: null, returnDate: null, eventStartDate: null, eventEndDate: null });
+      const profileOnly: EventDetailsFormData = {
+        name: profileName,
+        email: profileEmail,
+        pickupDate: null,
+        returnDate: null,
+        eventStartDate: null,
+        eventEndDate: null,
+      };
+      setFormData(profileOnly);
+      clearStoredEventDates(profileOnly);
+      setEventDetailsModalMode('required');
       clearCart();
       clearWishlist();
       await fetchItems();
@@ -342,20 +467,18 @@ export default function HomePage() {
     }
   };
 
-  // Generic handler for simple inputs (Name, Email)
-  const handleFormDataChange = (field: string, value: any) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
+  const handleEventDetailsSubmit = (values: EventDetailsFormData) => {
+    setFormData(values);
+    persistEventDetails(values);
+    const trimmedName = values.name.trim();
+    const trimmedEmail = values.email.trim();
+    if (trimmedName) setGuestName(trimmedName);
+    if (trimmedEmail) setGuestEmail(trimmedEmail);
+    setEventDetailsModalMode('closed');
   };
 
-  // Handlers for range selection
-  const handleEventDateChange = (dates: [Date | null, Date | null]) => {
-    const [start, end] = dates;
-    setFormData(prev => ({ ...prev, eventStartDate: start, eventEndDate: end }));
-  };
-
-  const handlePickupReturnDateChange = (dates: [Date | null, Date | null]) => {
-    const [start, end] = dates;
-    setFormData(prev => ({ ...prev, pickupDate: start, returnDate: end }));
+  const handleEditDetails = () => {
+    setEventDetailsModalMode('edit');
   };
 
   const handleFilterChange = (filter: Category) => {
@@ -455,28 +578,17 @@ export default function HomePage() {
               </button>
               <h1 className="text-2xl font-bold mb-2">Vellum Mortgage Event Items Store</h1>
               <p className="text-base opacity-90 mb-3">
-                Welcome! Use this tool to check out promotional items for your events. All items are free to use.
+                {datesPicked
+                  ? `Showing availability for ${format(formData.pickupDate!, 'MMM d')} – ${format(formData.returnDate!, 'MMM d, yyyy')}${availabilityLoading ? ' (checking reservations…)' : ''}.`
+                  : 'Start with your event details so we can show what is actually available for your dates.'}
               </p>
               <div className="bg-white bg-opacity-10 p-3 rounded-lg text-sm">
                 <h3 className="font-semibold mb-1">How to Use:</h3>
                 <ol className="list-decimal list-inside space-y-1">
-                  <li>Browse available items below. Check availability and details.</li>
-                  <li>Enter the desired quantity and click "Add to Cart" for each item needed.</li>
-                  <li>Click the cart icon to open the order form and fill out your details.</li>
-                  <li>Click "Place Order". You'll receive an email confirmation shortly.</li>
+                  <li>Fill in your event details when prompted.</li>
+                  <li>Browse items that are available for your dates.</li>
+                  <li>Add what you need and submit your request from the bottom bar.</li>
                 </ol>
-              </div>
-            </div>
-          )}
-
-          {!datesPicked && (
-            <div className="mb-4 flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
-              <CalendarRange className="h-5 w-5 flex-shrink-0 text-blue-600" />
-              <div>
-                <p className="font-medium">Pick your pickup and return dates to see real availability.</p>
-                <p className="text-xs text-blue-700 mt-0.5">
-                  Until you do, each card shows the total stock — items may already be reserved for other dates.
-                </p>
               </div>
             </div>
           )}
@@ -486,7 +598,7 @@ export default function HomePage() {
               filteredItems.map((item) => {
                 const cartQuantity = getItemQuantity(String(item.id));
                 const effectiveAvailable = getEffectiveAvailable(item);
-                const isOutOfStock = datesPicked ? effectiveAvailable <= 0 : item.available_quantity <= 0;
+                const isOutOfStock = datesPicked && effectiveAvailable <= 0;
                 const hasConflicts = datesPicked && effectiveAvailable < item.total_quantity;
                 return (
                   <div key={item.id} className="bg-white rounded-xl shadow-lg overflow-hidden flex flex-col">
@@ -563,12 +675,20 @@ export default function HomePage() {
                         />
                         <button
                           className={`flex-1 px-4 py-2 rounded-lg transition-colors text-white ${
-                            isOutOfStock
-                              ? 'bg-orange-500 hover:bg-orange-600'
-                              : 'bg-[#0075AE] hover:bg-[#005f8c] disabled:opacity-50 disabled:cursor-not-allowed'
+                            !datesPicked
+                              ? 'bg-gray-500 hover:bg-gray-600'
+                              : isOutOfStock
+                                ? 'bg-orange-500 hover:bg-orange-600'
+                                : 'bg-[#0075AE] hover:bg-[#005f8c] disabled:opacity-50 disabled:cursor-not-allowed'
                            }`}
-                          disabled={!isOutOfStock && cartQuantity >= effectiveAvailable}
+                          disabled={datesPicked && !isOutOfStock && cartQuantity >= effectiveAvailable}
                           onClick={() => {
+                            if (!datesPicked) {
+                              showInfo('Choose your pickup and return dates first so we can check real availability.');
+                              setEventDetailsModalMode('required');
+                              return;
+                            }
+
                             const input = document.getElementById(`quantity-${item.id}`) as HTMLInputElement;
                             const quantity = parseInt(input.value) || 1;
 
@@ -600,7 +720,11 @@ export default function HomePage() {
                             input.value = "1";
                           }}
                         >
-                          {isOutOfStock ? 'Add to Wishlist' : (cartQuantity >= effectiveAvailable ? 'Max in Cart' : 'Add to Cart')}
+                          {!datesPicked
+                            ? 'Choose Dates First'
+                            : isOutOfStock
+                              ? 'Add to Wishlist'
+                              : (cartQuantity >= effectiveAvailable ? 'Max in Cart' : 'Add to Cart')}
                         </button>
                       </div>
                     </div>
@@ -633,9 +757,7 @@ export default function HomePage() {
       {/* Bottom Request Bar */}
       <BottomRequestBar
         formData={formData}
-        onFormDataChange={handleFormDataChange}
-        onEventDateChange={handleEventDateChange}
-        onPickupReturnDateChange={handlePickupReturnDateChange}
+        onEditDetails={handleEditDetails}
         onSubmit={handleSubmit}
         isSubmitting={isSubmitting}
         submitCooldown={submitCooldown}
@@ -648,6 +770,19 @@ export default function HomePage() {
         onReorderItems={handleReorderItems}
         dateAvailability={dateAvailability}
       />
+
+      {eventDetailsModalMode !== 'closed' && (
+        <EventDetailsModal
+          mode={eventDetailsModalMode}
+          initialValues={formData}
+          onSubmit={handleEventDetailsSubmit}
+          onCancel={
+            eventDetailsModalMode === 'edit'
+              ? () => setEventDetailsModalMode('closed')
+              : undefined
+          }
+        />
+      )}
     </div>
   );
 }

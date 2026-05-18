@@ -1,17 +1,11 @@
-import React, { useState } from 'react';
-import DatePicker from 'react-datepicker';
-import { format, addDays } from 'date-fns';
-import { X, ShoppingCart, ChevronUp, ChevronDown, AlertCircle, History, Info } from 'lucide-react';
+import { useState } from 'react';
+import { format } from 'date-fns';
+import { X, ShoppingCart, ChevronUp, ChevronDown, History, Info, Pencil, CalendarRange } from 'lucide-react';
 import type { CartItem } from '../types';
 import OrderHistoryModal from './OrderHistoryModal';
 import AvailabilityInfo from './AvailabilityInfo';
 import { useGuestUser } from '../context/GuestUserContext';
 import type { DateAwareAvailability } from '../services/orderService';
-
-// Maximum allowed days between pickup and return.
-// Keep in sync with the `max_checkout_days` row in `app_config` and the
-// CHECK constraint `chk_max_checkout_duration` on the `orders` table.
-const MAX_CHECKOUT_DAYS = 14;
 
 interface BottomRequestBarProps {
   formData: {
@@ -22,9 +16,8 @@ interface BottomRequestBarProps {
     eventStartDate: Date | null;
     eventEndDate: Date | null;
   };
-  onFormDataChange: (field: string, value: any) => void;
-  onEventDateChange: (dates: [Date | null, Date | null]) => void;
-  onPickupReturnDateChange: (dates: [Date | null, Date | null]) => void;
+  /** Re-open the upfront EventDetailsModal so the user can change name/email/dates. */
+  onEditDetails: () => void;
   onSubmit: () => void;
   isSubmitting: boolean;
   /** Seconds remaining in the post-submission cooldown period (0 = not cooling down). */
@@ -44,9 +37,7 @@ interface BottomRequestBarProps {
 
 export default function BottomRequestBar({
   formData,
-  onFormDataChange,
-  onEventDateChange,
-  onPickupReturnDateChange,
+  onEditDetails,
   onSubmit,
   isSubmitting,
   submitCooldown = 0,
@@ -60,17 +51,14 @@ export default function BottomRequestBar({
   dateAvailability,
 }: BottomRequestBarProps) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const [showValidation, setShowValidation] = useState(false);
-  const [modalType, setModalType] = useState<'event' | 'pickup' | 'cart' | 'email_prompt' | null>(null);
+  const [modalType, setModalType] = useState<'cart' | 'email_prompt' | null>(null);
   const [showOrderHistory, setShowOrderHistory] = useState(false);
   const [emailPromptInput, setEmailPromptInput] = useState('');
-  const [dateErrors, setDateErrors] = useState<{ eventDates?: string; pickupDates?: string }>({});
-  const { guestEmail, setGuestEmail, clearGuestEmail } = useGuestUser();
+  const { guestEmail, setGuestEmail, clearGuestProfile } = useGuestUser();
 
   const totalCartQuantity = getTotalQuantity();
   const totalItems = totalCartQuantity + wishlistItems.length;
 
-  // Check if form is complete
   const isFormComplete = () => {
     return (
       formData.name.trim() !== '' &&
@@ -82,43 +70,6 @@ export default function BottomRequestBar({
     );
   };
 
-  /**
-   * Validates cross-field date relationships (issues #6 and #11).
-   * Returns an error map; empty object means all checks passed.
-   */
-  const validateDateRelationships = (): { eventDates?: string; pickupDates?: string } => {
-    const errors: { eventDates?: string; pickupDates?: string } = {};
-    const { pickupDate, returnDate, eventStartDate, eventEndDate } = formData;
-
-    // #11 – Maximum checkout window
-    if (pickupDate && returnDate) {
-      const diffDays = Math.round(
-        (returnDate.getTime() - pickupDate.getTime()) / (1000 * 60 * 60 * 24),
-      );
-      if (diffDays > MAX_CHECKOUT_DAYS) {
-        errors.pickupDates = `Return date is ${diffDays} days after pickup. The maximum checkout window is ${MAX_CHECKOUT_DAYS} days.`;
-      }
-    }
-
-    // #6 – Pickup must be on or before event start
-    if (pickupDate && eventStartDate && pickupDate > eventStartDate) {
-      errors.pickupDates = errors.pickupDates
-        ? `${errors.pickupDates} Also, pickup must be on or before the event start date.`
-        : 'Pickup date must be on or before the event start date.';
-    }
-
-    // #6 – Return must be on or after event end
-    if (returnDate && eventEndDate && returnDate < eventEndDate) {
-      const field = errors.pickupDates ? 'pickupDates' : 'pickupDates';
-      errors[field] = errors.pickupDates
-        ? `${errors.pickupDates} Also, return date must be on or after the event end date.`
-        : 'Return date must be on or after the event end date.';
-    }
-
-    return errors;
-  };
-
-  // Handle request items button click
   const handleRequestClick = () => {
     if (submitCooldown > 0) return;
 
@@ -127,78 +78,46 @@ export default function BottomRequestBar({
       return;
     }
 
+    // Defensive: the upfront modal should have already collected these, but if
+    // anything cleared them, send the user back to the popup instead of
+    // surfacing inline errors here.
     if (!isFormComplete()) {
-      setShowValidation(true);
-      setIsExpanded(true);
+      onEditDetails();
       return;
     }
 
-    // Cross-validate date relationships before submitting
-    const crossErrors = validateDateRelationships();
-    if (Object.keys(crossErrors).length > 0) {
-      setDateErrors(crossErrors);
-      setIsExpanded(true);
-      return;
-    }
-
-    setDateErrors({});
     onSubmit();
   };
 
-  // Handle date picker changes
-  const handleModalDateChange = (dates: [Date | null, Date | null]) => {
-    if (modalType === 'event') {
-      onEventDateChange(dates);
-      setDateErrors(prev => ({ ...prev, eventDates: undefined }));
-    } else if (modalType === 'pickup') {
-      onPickupReturnDateChange(dates);
-      setDateErrors(prev => ({ ...prev, pickupDates: undefined }));
-    }
-    const [start, end] = dates;
-    if (start && end) {
-      setModalType(null);
-      setShowValidation(false);
-    }
-  };
-
-  const getMissingFields = () => {
-    const missing: string[] = [];
-    if (!formData.name.trim()) missing.push('Name');
-    if (!formData.email.trim()) missing.push('Email');
-    if (!formData.eventStartDate || !formData.eventEndDate) missing.push('Event Dates');
-    if (!formData.pickupDate || !formData.returnDate) missing.push('Pickup & Return Dates');
-    return missing;
-  };
-
-  // Handle history button click
   const handleHistoryClick = () => {
     if (guestEmail) {
-      // User email is cached, show order history directly
       setShowOrderHistory(true);
     } else {
-      // Prompt for email
       setModalType('email_prompt');
       setEmailPromptInput('');
     }
   };
 
-  // Handle email prompt submission
   const handleEmailPromptSubmit = () => {
     if (emailPromptInput.trim()) {
-      // Save to guest email context
       setGuestEmail(emailPromptInput.trim());
-      
-      // Close prompt and show order history
       setModalType(null);
       setShowOrderHistory(true);
     }
   };
 
-  // Handle sign out
   const handleSignOut = () => {
-    clearGuestEmail();
+    clearGuestProfile();
     setShowOrderHistory(false);
   };
+
+  const formatRange = (start: Date | null, end: Date | null) => {
+    if (!start) return 'Not set';
+    if (!end) return format(start, 'MMM d, yyyy');
+    return `${format(start, 'MMM d')} – ${format(end, 'MMM d, yyyy')}`;
+  };
+
+  const pickupRangeLabel = formatRange(formData.pickupDate, formData.returnDate);
 
   return (
     <>
@@ -207,7 +126,7 @@ export default function BottomRequestBar({
         <div className="mx-auto max-w-7xl">
           {/* Collapsed View */}
           {!isExpanded && (
-            <div className="flex items-center justify-between px-4 py-3 sm:px-6">
+            <div className="flex items-center justify-between px-4 py-3 sm:px-6 gap-3">
               {/* Left: Cart Info & History */}
               <div className="flex items-center gap-2">
                 <button
@@ -229,8 +148,7 @@ export default function BottomRequestBar({
                     <p className="text-xs text-gray-500">View cart</p>
                   </div>
                 </button>
-                
-                {/* History Icon */}
+
                 <button
                   onClick={handleHistoryClick}
                   className="p-2 hover:bg-gray-50 rounded-lg transition-colors group"
@@ -240,27 +158,42 @@ export default function BottomRequestBar({
                 </button>
               </div>
 
-              {/* Center: Expand Button (Mobile only) */}
+              {/* Center: Date pill / edit details button (always visible) */}
               <button
-                onClick={() => setIsExpanded(true)}
-                className="sm:hidden text-gray-500 hover:text-gray-700"
+                onClick={onEditDetails}
+                className="hidden sm:flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 hover:border-[#0075AE] hover:bg-blue-50 transition-colors text-sm"
+                title="Change event details"
               >
-                <ChevronUp className="h-5 w-5" />
+                <CalendarRange className="h-4 w-4 text-[#0075AE]" />
+                <span className="font-medium text-gray-900">
+                  {formData.pickupDate ? pickupRangeLabel : 'Set event details'}
+                </span>
+                <Pencil className="h-3.5 w-3.5 text-gray-400" />
               </button>
 
-              {/* Right: Request Items Button */}
-              <div className="flex items-center gap-3">
+              {/* Mobile: compact edit-details icon */}
+              <button
+                onClick={onEditDetails}
+                className="sm:hidden p-2 hover:bg-gray-50 rounded-lg transition-colors"
+                title="Change event details"
+                aria-label="Change event details"
+              >
+                <CalendarRange className="h-6 w-6 text-[#0075AE]" />
+              </button>
+
+              {/* Right: Expand toggle + Submit */}
+              <div className="flex items-center gap-2">
                 <button
                   onClick={() => setIsExpanded(true)}
-                  className="hidden sm:flex items-center gap-2 px-4 py-2 text-sm text-gray-600 hover:text-gray-900 transition-colors"
+                  className="hidden sm:flex items-center gap-1 px-2 py-2 text-sm text-gray-600 hover:text-gray-900 transition-colors"
+                  title="View details"
                 >
-                  <span>Fill Details</span>
                   <ChevronUp className="h-4 w-4" />
                 </button>
                 <button
                   onClick={handleRequestClick}
                   disabled={isSubmitting || submitCooldown > 0 || totalItems === 0}
-                  className="bg-[#0075AE] text-white px-6 py-2.5 rounded-lg font-medium hover:bg-[#005f8c] disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+                  className="bg-[#0075AE] text-white px-5 py-2.5 rounded-lg font-medium hover:bg-[#005f8c] disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
                 >
                   <span className="text-sm sm:text-base">
                     {isSubmitting
@@ -279,127 +212,69 @@ export default function BottomRequestBar({
             <div className="px-4 py-4 sm:px-6 max-h-[70vh] overflow-y-auto">
               {/* Header with Close Button */}
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-gray-900">Complete Your Request</h3>
+                <h3 className="text-lg font-semibold text-gray-900">Review Your Request</h3>
                 <button
-                  onClick={() => {
-                    setIsExpanded(false);
-                    setShowValidation(false);
-                  }}
+                  onClick={() => setIsExpanded(false)}
                   className="text-gray-500 hover:text-gray-700"
+                  aria-label="Collapse"
                 >
                   <ChevronDown className="h-5 w-5" />
                 </button>
               </div>
 
-              {/* Validation Alert */}
-              {showValidation && getMissingFields().length > 0 && (
-                <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-start gap-2">
-                  <AlertCircle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
+              {/* Read-only event details summary */}
+              <div className="mb-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
+                <div className="flex items-start justify-between gap-3 mb-3">
                   <div>
-                    <p className="text-sm font-medium text-amber-900">Please complete all required fields:</p>
-                    <p className="text-sm text-amber-700 mt-1">{getMissingFields().join(', ')}</p>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-[#0075AE]">
+                      Event details
+                    </p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      Collected when you started. Tap edit to change.
+                    </p>
                   </div>
-                </div>
-              )}
-
-              {/* Form Fields Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-                {/* Name */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Your Name <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Enter your name"
-                    value={formData.name}
-                    onChange={(e) => {
-                      onFormDataChange('name', e.target.value);
-                      setShowValidation(false);
-                    }}
-                    className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-[#0075AE] focus:border-transparent outline-none ${
-                      showValidation && !formData.name.trim() ? 'border-red-300 bg-red-50' : 'border-gray-300'
-                    }`}
-                  />
-                </div>
-
-                {/* Email */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Email Address <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="email"
-                    placeholder="your.email@vellummortgage.com"
-                    value={formData.email}
-                    onChange={(e) => {
-                      onFormDataChange('email', e.target.value);
-                      setShowValidation(false);
-                    }}
-                    className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-[#0075AE] focus:border-transparent outline-none ${
-                      showValidation && !formData.email.trim() ? 'border-red-300 bg-red-50' : 'border-gray-300'
-                    }`}
-                  />
-                </div>
-
-                {/* Event Dates */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Event Dates <span className="text-red-500">*</span>
-                  </label>
                   <button
-                    type="button"
-                    onClick={() => setModalType('event')}
-                    className={`w-full px-3 py-2 border rounded-lg text-left focus:ring-2 focus:ring-[#0075AE] focus:border-transparent outline-none ${
-                      (showValidation && (!formData.eventStartDate || !formData.eventEndDate)) ||
-                      dateErrors.eventDates
-                        ? 'border-red-300 bg-red-50'
-                        : 'border-gray-300'
-                    } ${formData.eventStartDate ? 'text-gray-900' : 'text-gray-400'}`}
+                    onClick={onEditDetails}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-[#0075AE] border border-[#0075AE] rounded-lg hover:bg-[#0075AE] hover:text-white transition-colors"
                   >
-                    {formData.eventStartDate
-                      ? `${format(formData.eventStartDate, 'MMM d')}${
-                          formData.eventEndDate ? ` - ${format(formData.eventEndDate, 'MMM d, yyyy')}` : ''
-                        }`
-                      : 'Select event dates'}
+                    <Pencil className="h-3.5 w-3.5" />
+                    Edit details
                   </button>
-                  {dateErrors.eventDates && (
-                    <p className="mt-1 text-xs text-red-600 flex items-start gap-1">
-                      <AlertCircle className="h-3 w-3 mt-0.5 flex-shrink-0" />
-                      {dateErrors.eventDates}
-                    </p>
-                  )}
                 </div>
-
-                {/* Pickup & Return Dates */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Pickup & Return Dates <span className="text-red-500">*</span>
-                    <span className="ml-1 font-normal text-gray-400">(max {MAX_CHECKOUT_DAYS} days)</span>
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setModalType('pickup')}
-                    className={`w-full px-3 py-2 border rounded-lg text-left focus:ring-2 focus:ring-[#0075AE] focus:border-transparent outline-none ${
-                      (showValidation && (!formData.pickupDate || !formData.returnDate)) ||
-                      dateErrors.pickupDates
-                        ? 'border-red-300 bg-red-50'
-                        : 'border-gray-300'
-                    } ${formData.pickupDate ? 'text-gray-900' : 'text-gray-400'}`}
-                  >
-                    {formData.pickupDate
-                      ? `${format(formData.pickupDate, 'MMM d')}${
-                          formData.returnDate ? ` - ${format(formData.returnDate, 'MMM d, yyyy')}` : ''
-                        }`
-                      : 'Select pickup & return dates'}
-                  </button>
-                  {dateErrors.pickupDates && (
-                    <p className="mt-1 text-xs text-red-600 flex items-start gap-1">
-                      <AlertCircle className="h-3 w-3 mt-0.5 flex-shrink-0" />
-                      {dateErrors.pickupDates}
-                    </p>
-                  )}
-                </div>
+                <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                  <div>
+                    <dt className="text-gray-500">Name</dt>
+                    <dd className="text-gray-900 font-medium">
+                      {formData.name || <span className="text-amber-600">Not set</span>}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-gray-500">Email</dt>
+                    <dd className="text-gray-900 font-medium break-all">
+                      {formData.email || <span className="text-amber-600">Not set</span>}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-gray-500">Event dates</dt>
+                    <dd className="text-gray-900 font-medium">
+                      {formData.eventStartDate ? (
+                        formatRange(formData.eventStartDate, formData.eventEndDate)
+                      ) : (
+                        <span className="text-amber-600">Not set</span>
+                      )}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-gray-500">Pickup &amp; return</dt>
+                    <dd className="text-gray-900 font-medium">
+                      {formData.pickupDate ? (
+                        pickupRangeLabel
+                      ) : (
+                        <span className="text-amber-600">Not set</span>
+                      )}
+                    </dd>
+                  </div>
+                </dl>
               </div>
 
               {/* Cart Summary */}
@@ -442,60 +317,16 @@ export default function BottomRequestBar({
         </div>
       </div>
 
-      {/* Modals */}
+      {/* Cart / Email-prompt Modals */}
       {modalType && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          {/* Overlay */}
           <div className="fixed inset-0 bg-black bg-opacity-50" onClick={() => setModalType(null)}></div>
 
-          {/* Modal Content */}
           <div className="relative bg-white p-6 rounded-lg shadow-xl z-50 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             <button onClick={() => setModalType(null)} className="absolute top-3 right-3 text-gray-500 hover:text-gray-700">
               <X className="h-5 w-5" />
             </button>
 
-            {/* Date Picker Modal */}
-            {(modalType === 'event' || modalType === 'pickup') && (
-              <>
-                <h3 className="text-lg font-semibold mb-4 text-center">
-                  {modalType === 'event' ? 'Select Event Dates' : 'Select Pickup & Return Dates'}
-                </h3>
-                <p className="text-sm text-gray-600 mb-4 text-center">
-                  {modalType === 'event'
-                    ? 'When is your event taking place?'
-                    : 'When will you pick up and return the items?'}
-                </p>
-                <div className="flex justify-center">
-                  <DatePicker
-                    selected={modalType === 'event' ? formData.eventStartDate : formData.pickupDate}
-                    onChange={handleModalDateChange}
-                    startDate={modalType === 'event' ? formData.eventStartDate : formData.pickupDate}
-                    endDate={modalType === 'event' ? formData.eventEndDate : formData.returnDate}
-                    selectsRange={true}
-                    inline
-                    monthsShown={2}
-                    minDate={new Date()}
-                    // #11: When selecting pickup/return, disable any return date that would
-                    // exceed MAX_CHECKOUT_DAYS from the currently selected pickup date.
-                    maxDate={
-                      modalType === 'pickup' && formData.pickupDate
-                        ? addDays(formData.pickupDate, MAX_CHECKOUT_DAYS)
-                        : undefined
-                    }
-                  />
-                </div>
-                {modalType === 'pickup' && (
-                  <p className="mt-3 text-xs text-gray-500 text-center">
-                    Maximum checkout window: {MAX_CHECKOUT_DAYS} days (pickup to return).
-                    {formData.pickupDate && (
-                      <> Latest return: <strong>{format(addDays(formData.pickupDate, MAX_CHECKOUT_DAYS), 'MMM d, yyyy')}</strong>.</>
-                    )}
-                  </p>
-                )}
-              </>
-            )}
-
-            {/* Cart/Wishlist Modal */}
             {modalType === 'cart' && (
               <>
                 <h3 className="text-lg font-semibold mb-4 text-center">Your Request</h3>
@@ -628,7 +459,6 @@ export default function BottomRequestBar({
               </>
             )}
 
-            {/* Email Prompt Modal */}
             {modalType === 'email_prompt' && (
               <>
                 <h3 className="text-lg font-semibold mb-4 text-center">View Your Order History</h3>
@@ -684,4 +514,3 @@ export default function BottomRequestBar({
     </>
   );
 }
-
