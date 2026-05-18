@@ -1,3 +1,4 @@
+import { format, parseISO } from 'date-fns';
 import { supabase } from '../lib/supabase';
 import type { CartItem } from '../types';
 
@@ -37,6 +38,17 @@ export interface DateAwareAvailability {
 export interface ItemConflictRange {
   checkoutDate: string;
   returnDate: string;
+  quantity: number;
+}
+
+/** Active checkout the same user already holds for an item in a date window. */
+export interface UserExistingReservation {
+  itemId: string;
+  orderId: string;
+  orderNumber: string | null;
+  checkoutDate: string;
+  returnDate: string;
+  status: string;
   quantity: number;
 }
 
@@ -142,6 +154,125 @@ export async function fetchItemConflicts(
     returnDate: row.return_date,
     quantity: row.quantity,
   }));
+}
+
+/**
+ * Returns active (pending / picked_up) checkouts for this email that overlap the
+ * given window — used to block wishlisting an item the user already reserved.
+ */
+export async function fetchUserReservationsForWindow(
+  userEmail: string,
+  startDate: Date,
+  endDate: Date,
+): Promise<UserExistingReservation[]> {
+  const trimmed = userEmail.trim();
+  if (!trimmed) return [];
+
+  const { data, error } = await supabase.rpc('get_user_reservations_for_window', {
+    p_user_email: trimmed,
+    p_start: formatDateLocal(startDate),
+    p_end: formatDateLocal(endDate),
+  });
+
+  if (error) {
+    console.error('Failed to fetch user reservations', error);
+    return [];
+  }
+
+  return (data ?? []).map(
+    (row: {
+      item_id: string;
+      order_id: string;
+      order_number: string | null;
+      checkout_date: string;
+      return_date: string;
+      status: string;
+      quantity: number;
+    }) => ({
+      itemId: row.item_id,
+      orderId: row.order_id,
+      orderNumber: row.order_number,
+      checkoutDate: row.checkout_date,
+      returnDate: row.return_date,
+      status: row.status,
+      quantity: row.quantity,
+    }),
+  );
+}
+
+export async function findUserOverlappingReservation(
+  userEmail: string,
+  itemId: string,
+  startDate: Date,
+  endDate: Date,
+): Promise<UserExistingReservation | null> {
+  const trimmed = userEmail.trim();
+  if (!trimmed) return null;
+
+  const { data, error } = await supabase.rpc('get_user_overlapping_reservations', {
+    p_user_email: trimmed,
+    p_item_id: itemId,
+    p_start: formatDateLocal(startDate),
+    p_end: formatDateLocal(endDate),
+  });
+
+  if (error) {
+    console.error('Failed to check user reservation overlap', error);
+    return null;
+  }
+
+  const row = data?.[0];
+  if (!row) return null;
+
+  return {
+    itemId,
+    orderId: row.order_id,
+    orderNumber: row.order_number,
+    checkoutDate: row.checkout_date,
+    returnDate: row.return_date,
+    status: row.status,
+    quantity: row.quantity,
+  };
+}
+
+export function formatReservationMessage(
+  reservation: UserExistingReservation,
+  itemName?: string,
+): string {
+  const label = itemName ? `${itemName}: ` : '';
+  const orderRef = reservation.orderNumber || 'your existing order';
+  const pickup = format(parseISO(reservation.checkoutDate), 'MMM d');
+  const returnD = format(parseISO(reservation.returnDate), 'MMM d, yyyy');
+  return `${label}You already have this on order ${orderRef} (${pickup} – ${returnD}).`;
+}
+
+/**
+ * Filters wishlist items the user already holds on an active order for overlapping dates.
+ */
+export async function filterWishlistBlockedByOwnReservation(
+  wishlistItems: CartItem[],
+  userEmail: string,
+  pickupDate: Date,
+  returnDate: Date,
+): Promise<{ allowed: CartItem[]; blocked: Array<{ item: CartItem; reservation: UserExistingReservation }> }> {
+  const blocked: Array<{ item: CartItem; reservation: UserExistingReservation }> = [];
+  const allowed: CartItem[] = [];
+
+  for (const item of wishlistItems) {
+    const reservation = await findUserOverlappingReservation(
+      userEmail,
+      String(item.id),
+      pickupDate,
+      returnDate,
+    );
+    if (reservation) {
+      blocked.push({ item, reservation });
+    } else {
+      allowed.push(item);
+    }
+  }
+
+  return { allowed, blocked };
 }
 
 /**

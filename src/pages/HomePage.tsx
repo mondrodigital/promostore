@@ -20,9 +20,13 @@ import {
   sendOrderNotifications,
   sendPowerAutomateWebhook,
   fetchAvailabilityForDates,
+  fetchUserReservationsForWindow,
+  filterWishlistBlockedByOwnReservation,
+  formatReservationMessage,
   InsufficientStockError,
   type OrderFormData,
   type DateAwareAvailability,
+  type UserExistingReservation,
 } from '../services/orderService';
 
 // Seconds to disable the submit button after any submission attempt (success or failure).
@@ -152,6 +156,10 @@ export default function HomePage() {
   // window. Empty until the user picks both dates.
   const [dateAvailability, setDateAvailability] = useState<Record<string, DateAwareAvailability>>({});
   const [availabilityLoading, setAvailabilityLoading] = useState(false);
+  // Active checkouts this user already holds for the selected date window (item_id -> reservation).
+  const [userReservationsByItemId, setUserReservationsByItemId] = useState<
+    Record<string, UserExistingReservation>
+  >({});
 
   // Countdown tick for post-submission cooldown
   useEffect(() => {
@@ -272,6 +280,33 @@ export default function HomePage() {
     };
   }, [pickupDate, returnDate, items]);
 
+  const userEmail = formData.email.trim();
+  useEffect(() => {
+    if (!pickupDate || !returnDate || !userEmail) {
+      setUserReservationsByItemId({});
+      return;
+    }
+
+    let cancelled = false;
+    fetchUserReservationsForWindow(userEmail, pickupDate, returnDate)
+      .then(rows => {
+        if (cancelled) return;
+        const next: Record<string, UserExistingReservation> = {};
+        rows.forEach(row => {
+          next[row.itemId] = row;
+        });
+        setUserReservationsByItemId(next);
+      })
+      .catch(err => {
+        console.error('Failed to load user reservations', err);
+        if (!cancelled) setUserReservationsByItemId({});
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pickupDate, returnDate, userEmail]);
+
   // Resolves the effective available quantity for an item, preferring the
   // date-aware value when dates have been picked.
   const getEffectiveAvailable = (item: PromoItem): number => {
@@ -384,6 +419,32 @@ export default function HomePage() {
       let orderNumber: string | null = null;
       let orderSuccessful = false;
       let wishlistSaved = false;
+      let wishlistToSubmit = wishlistItems;
+
+      if (
+        wishlistItems.length > 0 &&
+        formData.pickupDate &&
+        formData.returnDate &&
+        formData.email.trim()
+      ) {
+        const { allowed, blocked } = await filterWishlistBlockedByOwnReservation(
+          wishlistItems,
+          formData.email,
+          formData.pickupDate,
+          formData.returnDate,
+        );
+        wishlistToSubmit = allowed;
+        blocked.forEach(({ item, reservation }) => {
+          removeFromWishlist(String(item.id));
+          showWarning(formatReservationMessage(reservation, item.name));
+        });
+        if (blocked.length > 0 && allowed.length === 0 && cartItems.length === 0) {
+          showError('These items are already on one of your active orders. Check order history.');
+          setIsSubmitting(false);
+          submittingRef.current = false;
+          return;
+        }
+      }
 
       if (cartItems.length > 0) {
         try {
@@ -403,19 +464,19 @@ export default function HomePage() {
           }
           throw rpcErr;
         }
-      } else if (wishlistItems.length > 0) {
+      } else if (wishlistToSubmit.length > 0) {
         const orderResult = await createOrderAtomic(orderFormData, [], 'wishlist_only', idempotencyKey);
         orderId = orderResult.orderId;
         orderNumber = orderResult.orderNumber;
       }
 
-      if (wishlistItems.length > 0 && orderId) {
-        await saveWishlistItems(orderId, wishlistItems, orderFormData);
+      if (wishlistToSubmit.length > 0 && orderId) {
+        await saveWishlistItems(orderId, wishlistToSubmit, orderFormData);
         wishlistSaved = true;
       }
 
       if ((orderSuccessful || wishlistSaved) && orderId) {
-        await sendOrderNotifications(orderId, orderNumber, orderFormData, cartItems, wishlistItems);
+        await sendOrderNotifications(orderId, orderNumber, orderFormData, cartItems, wishlistToSubmit);
         
         if (orderSuccessful) {
           await sendPowerAutomateWebhook(orderId, orderNumber, orderFormData);
@@ -600,6 +661,8 @@ export default function HomePage() {
                 const effectiveAvailable = getEffectiveAvailable(item);
                 const isOutOfStock = datesPicked && effectiveAvailable <= 0;
                 const hasConflicts = datesPicked && effectiveAvailable < item.total_quantity;
+                const ownReservation = userReservationsByItemId[String(item.id)];
+                const blockedByOwnOrder = isOutOfStock && !!ownReservation;
                 return (
                   <div key={item.id} className="bg-white rounded-xl shadow-lg overflow-hidden flex flex-col">
                     <div className="aspect-square relative">
@@ -641,7 +704,12 @@ export default function HomePage() {
                                 </span>
                                 {' '}of {item.total_quantity}
                               </p>
-                              {hasConflicts && (
+                              {ownReservation && (
+                                <p className="mt-1 text-xs font-medium text-[#0075AE]">
+                                  On your order {ownReservation.orderNumber || '—'}
+                                </p>
+                              )}
+                              {hasConflicts && !ownReservation && (
                                 <div className="mt-1">
                                   <AvailabilityInfo
                                     itemId={String(item.id)}
@@ -677,11 +745,16 @@ export default function HomePage() {
                           className={`flex-1 px-4 py-2 rounded-lg transition-colors text-white ${
                             !datesPicked
                               ? 'bg-gray-500 hover:bg-gray-600'
-                              : isOutOfStock
-                                ? 'bg-orange-500 hover:bg-orange-600'
-                                : 'bg-[#0075AE] hover:bg-[#005f8c] disabled:opacity-50 disabled:cursor-not-allowed'
+                              : blockedByOwnOrder
+                                ? 'bg-gray-400 cursor-not-allowed'
+                                : isOutOfStock
+                                  ? 'bg-orange-500 hover:bg-orange-600'
+                                  : 'bg-[#0075AE] hover:bg-[#005f8c] disabled:opacity-50 disabled:cursor-not-allowed'
                            }`}
-                          disabled={datesPicked && !isOutOfStock && cartQuantity >= effectiveAvailable}
+                          disabled={
+                            blockedByOwnOrder ||
+                            (datesPicked && !isOutOfStock && cartQuantity >= effectiveAvailable)
+                          }
                           onClick={() => {
                             if (!datesPicked) {
                               showInfo('Choose your pickup and return dates first so we can check real availability.');
@@ -694,6 +767,11 @@ export default function HomePage() {
 
                             if (quantity <= 0) {
                               showError('Please enter a valid quantity');
+                              return;
+                            }
+
+                            if (blockedByOwnOrder && ownReservation) {
+                              showInfo(formatReservationMessage(ownReservation, item.name));
                               return;
                             }
 
@@ -722,9 +800,11 @@ export default function HomePage() {
                         >
                           {!datesPicked
                             ? 'Choose Dates First'
-                            : isOutOfStock
-                              ? 'Add to Wishlist'
-                              : (cartQuantity >= effectiveAvailable ? 'Max in Cart' : 'Add to Cart')}
+                            : blockedByOwnOrder
+                              ? 'On Your Order'
+                              : isOutOfStock
+                                ? 'Add to Wishlist'
+                                : (cartQuantity >= effectiveAvailable ? 'Max in Cart' : 'Add to Cart')}
                         </button>
                       </div>
                     </div>
