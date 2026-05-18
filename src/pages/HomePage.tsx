@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
 import { format } from 'date-fns';
 import { supabase } from '../lib/supabase';
-import { Package2, X } from 'lucide-react';
+import { Package2, X, CalendarRange } from 'lucide-react';
 import { useCart } from '../context/CartContext';
 import { useGuestUser } from '../context/GuestUserContext';
 import { useToast } from '../context/ToastContext';
@@ -146,11 +146,8 @@ export default function HomePage() {
   const [isBannerVisible, setIsBannerVisible] = useState(true);
   const submittingRef = useRef(false);
 
-  // Controls the upfront event-details popup. `required` blocks the storefront
-  // until the user fills it in; `edit` lets them tweak details later.
-  const [eventDetailsModalMode, setEventDetailsModalMode] = useState<
-    'closed' | 'required' | 'edit'
-  >('closed');
+  // Event-details popup — only opened when the user asks (never blocks browsing or login).
+  const [isEventDetailsOpen, setIsEventDetailsOpen] = useState(false);
 
   // Map of item_id -> date-aware availability for the chosen [pickup, return]
   // window. Empty until the user picks both dates.
@@ -232,7 +229,6 @@ export default function HomePage() {
         pickupDate: null,
         returnDate: null,
       }));
-      setEventDetailsModalMode('required');
     }
   }, []);
 
@@ -498,7 +494,7 @@ export default function HomePage() {
       };
       setFormData(profileOnly);
       clearStoredEventDates(profileOnly);
-      setEventDetailsModalMode('required');
+      setIsEventDetailsOpen(false);
       clearCart();
       clearWishlist();
       await fetchItems();
@@ -535,11 +531,11 @@ export default function HomePage() {
     const trimmedEmail = values.email.trim();
     if (trimmedName) setGuestName(trimmedName);
     if (trimmedEmail) setGuestEmail(trimmedEmail);
-    setEventDetailsModalMode('closed');
+    setIsEventDetailsOpen(false);
   };
 
-  const handleEditDetails = () => {
-    setEventDetailsModalMode('edit');
+  const openEventDetailsModal = () => {
+    setIsEventDetailsOpen(true);
   };
 
   const handleFilterChange = (filter: Category) => {
@@ -641,17 +637,37 @@ export default function HomePage() {
               <p className="text-base opacity-90 mb-3">
                 {datesPicked
                   ? `Showing availability for ${format(formData.pickupDate!, 'MMM d')} – ${format(formData.returnDate!, 'MMM d, yyyy')}${availabilityLoading ? ' (checking reservations…)' : ''}.`
-                  : 'Start with your event details so we can show what is actually available for your dates.'}
+                  : 'Browse the catalog anytime. Add your event dates when you are ready to see availability and request items.'}
               </p>
               <div className="bg-white bg-opacity-10 p-3 rounded-lg text-sm">
                 <h3 className="font-semibold mb-1">How to Use:</h3>
                 <ol className="list-decimal list-inside space-y-1">
-                  <li>Fill in your event details when prompted.</li>
-                  <li>Browse items that are available for your dates.</li>
-                  <li>Add what you need and submit your request from the bottom bar.</li>
+                  <li>Browse items in the store.</li>
+                  <li>Add event dates to see what is available for your pickup and return window.</li>
+                  <li>Add items to your request and submit from the bottom bar.</li>
                 </ol>
               </div>
             </div>
+          )}
+
+          {!datesPicked && (
+            <button
+              type="button"
+              onClick={openEventDetailsModal}
+              className="mb-6 w-full rounded-xl border-2 border-dashed border-[#0075AE] bg-blue-50 px-4 py-4 text-left transition-colors hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-[#0075AE] focus:ring-offset-2"
+            >
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-white text-[#0075AE] shadow-sm">
+                  <CalendarRange className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="font-semibold text-[#0075AE]">Add event dates to see availability</p>
+                  <p className="text-sm text-gray-600">
+                    Tell us when your event is and when you will pick up and return items. You can browse without this step.
+                  </p>
+                </div>
+              </div>
+            </button>
           )}
 
           <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6">
@@ -726,8 +742,14 @@ export default function HomePage() {
                             </>
                           ) : (
                             <>
-                              <p>Total: {item.total_quantity}</p>
-                              <p className="text-xs text-gray-500 italic">Pick dates to see availability</p>
+                              <p>Total in inventory: {item.total_quantity}</p>
+                              <button
+                                type="button"
+                                onClick={openEventDetailsModal}
+                                className="mt-1 text-xs font-medium text-[#0075AE] hover:underline text-left"
+                              >
+                                Add event dates to see availability
+                              </button>
                             </>
                           )}
                         </div>
@@ -757,8 +779,7 @@ export default function HomePage() {
                           }
                           onClick={() => {
                             if (!datesPicked) {
-                              showInfo('Choose your pickup and return dates first so we can check real availability.');
-                              setEventDetailsModalMode('required');
+                              openEventDetailsModal();
                               return;
                             }
 
@@ -799,7 +820,7 @@ export default function HomePage() {
                           }}
                         >
                           {!datesPicked
-                            ? 'Choose Dates First'
+                            ? 'Request'
                             : blockedByOwnOrder
                               ? 'On Your Order'
                               : isOutOfStock
@@ -837,7 +858,7 @@ export default function HomePage() {
       {/* Bottom Request Bar */}
       <BottomRequestBar
         formData={formData}
-        onEditDetails={handleEditDetails}
+        onEditDetails={openEventDetailsModal}
         onSubmit={handleSubmit}
         isSubmitting={isSubmitting}
         submitCooldown={submitCooldown}
@@ -851,16 +872,13 @@ export default function HomePage() {
         dateAvailability={dateAvailability}
       />
 
-      {eventDetailsModalMode !== 'closed' && (
+      {isEventDetailsOpen && (
         <EventDetailsModal
-          mode={eventDetailsModalMode}
+          mode="edit"
+          hasDatesSet={datesPicked}
           initialValues={formData}
           onSubmit={handleEventDetailsSubmit}
-          onCancel={
-            eventDetailsModalMode === 'edit'
-              ? () => setEventDetailsModalMode('closed')
-              : undefined
-          }
+          onCancel={() => setIsEventDetailsOpen(false)}
         />
       )}
     </div>

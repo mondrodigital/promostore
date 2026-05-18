@@ -18,24 +18,20 @@ export interface EventDetailsFormData {
 }
 
 interface EventDetailsModalProps {
-  /**
-   * `required` - hard gate: no close button, overlay clicks ignored. Used on
-   * first visit before the user has set dates so the storefront has real
-   * availability data to show.
-   * `edit` - soft modal: close button + overlay-click dismiss. Used when the
-   * user re-opens the form from the bottom bar to tweak details.
-   */
-  mode: 'required' | 'edit';
+  /** Kept for API compatibility; modal is always dismissible so browsing/login stay reachable. */
+  mode: 'edit';
+  /** When false, copy explains that dates unlock availability in the store. */
+  hasDatesSet?: boolean;
   initialValues: EventDetailsFormData;
   onSubmit: (values: EventDetailsFormData) => void;
-  onCancel?: () => void;
+  onCancel: () => void;
 }
 
 const isVellumEmail = (email: string) =>
   email.toLowerCase().endsWith('@vellummortgage.com');
 
 export default function EventDetailsModal({
-  mode,
+  hasDatesSet = false,
   initialValues,
   onSubmit,
   onCancel,
@@ -120,7 +116,7 @@ export default function EventDetailsModal({
   };
 
   const handleOverlayClick = () => {
-    if (mode === 'edit' && onCancel) onCancel();
+    onCancel();
   };
 
   return (
@@ -131,26 +127,22 @@ export default function EventDetailsModal({
       />
 
       <div className="relative z-50 w-full max-w-3xl max-h-[92vh] overflow-y-auto rounded-2xl bg-white shadow-2xl">
-        {mode === 'edit' && onCancel && (
-          <button
-            onClick={onCancel}
-            className="absolute top-3 right-3 text-gray-500 hover:text-gray-700"
-            aria-label="Close"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        )}
+        <button
+          onClick={onCancel}
+          className="absolute top-3 right-3 text-gray-500 hover:text-gray-700"
+          aria-label="Close"
+        >
+          <X className="h-5 w-5" />
+        </button>
 
         <div className="px-6 pt-6 pb-4 border-b border-gray-100">
-          <h2 className="text-xl font-semibold text-gray-900">
-            {mode === 'required'
-              ? 'Tell us about your event'
-              : 'Update your event details'}
+          <h2 className="text-xl font-semibold text-gray-900 pr-8">
+            {hasDatesSet ? 'Update your event details' : 'Add event dates to see availability'}
           </h2>
           <p className="mt-1 text-sm text-gray-600">
-            {mode === 'required'
-              ? 'We use these details to show you what is actually available for your dates. You can change them later.'
-              : 'Changes will update availability across the store.'}
+            {hasDatesSet
+              ? 'Changes will update availability across the store.'
+              : 'We need your event and pickup/return dates before you can see what is free and add items to your request.'}
           </p>
         </div>
 
@@ -291,20 +283,18 @@ export default function EventDetailsModal({
         </div>
 
         <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 rounded-b-2xl flex items-center justify-end gap-3">
-          {mode === 'edit' && onCancel && (
-            <button
-              onClick={onCancel}
-              className="px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-900"
-            >
-              Cancel
-            </button>
-          )}
+          <button
+            onClick={onCancel}
+            className="px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-900"
+          >
+            Cancel
+          </button>
           <button
             onClick={handleSubmit}
             disabled={showErrors && !isValid}
             className="bg-[#0075AE] text-white px-6 py-2.5 rounded-lg font-medium hover:bg-[#005f8c] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            {mode === 'required' ? 'Continue to store' : 'Save details'}
+            {hasDatesSet ? 'Save details' : 'See availability'}
           </button>
         </div>
       </div>
