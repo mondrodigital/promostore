@@ -42,9 +42,11 @@ interface OrderHistoryModalProps {
   userEmail: string;
   onReorder: (items: Array<{ id: string; quantity: number }>) => void;
   onSignOut: () => void;
+  /** Notify parent after cancel so storefront reservation badges can refresh. */
+  onOrdersChanged?: () => void;
 }
 
-export default function OrderHistoryModal({ isOpen, onClose, userEmail, onReorder, onSignOut }: OrderHistoryModalProps) {
+export default function OrderHistoryModal({ isOpen, onClose, userEmail, onReorder, onSignOut, onOrdersChanged }: OrderHistoryModalProps) {
   const [orders, setOrders] = useState<OrderHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -155,6 +157,7 @@ export default function OrderHistoryModal({ isOpen, onClose, userEmail, onReorde
       setCancelConfirmId(null);
       // Refresh list to show updated status
       await fetchOrderHistory();
+      onOrdersChanged?.();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to cancel order';
       setCancelError(msg);

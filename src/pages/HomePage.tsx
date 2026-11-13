@@ -28,15 +28,15 @@ import {
   type DateAwareAvailability,
   type UserExistingReservation,
 } from '../services/orderService';
+import {
+  EVENT_DETAILS_SESSION_KEY,
+  STOREFRONT_CLEAR_EVENT,
+  isVellumEmail,
+} from '../lib/storefrontSession';
 
 // Seconds to disable the submit button after any submission attempt (success or failure).
 // Prevents accidental double-clicks and rapid-fire retries from the UI.
 const SUBMIT_COOLDOWN_SECONDS = 5;
-
-// sessionStorage key for the upfront event-details form. Persists across
-// navigation/refresh within the same browser session so users aren't
-// re-prompted every refresh, but a fresh session re-prompts them.
-const EVENT_DETAILS_SESSION_KEY = 'vellum_event_details_session';
 
 type StoredEventDetails = {
   name?: string;
@@ -46,6 +46,15 @@ type StoredEventDetails = {
   pickupDate?: string | null;
   returnDate?: string | null;
 };
+
+const emptyEventDetails = (): EventDetailsFormData => ({
+  name: '',
+  email: '',
+  pickupDate: null,
+  returnDate: null,
+  eventStartDate: null,
+  eventEndDate: null,
+});
 
 const startOfToday = () => {
   const d = new Date();
@@ -120,7 +129,7 @@ export default function HomePage() {
   // after a successful order. If the user retries before success (network hiccup,
   // double-click bypass), the server returns the existing order instead of a dup.
   const [idempotencyKey, setIdempotencyKey] = useState<string>(() => crypto.randomUUID());
-  const { guestEmail, guestName, setGuestEmail, setGuestName } = useGuestUser();
+  const { guestEmail, guestName, setGuestEmail, setGuestName, clearStorefrontSession } = useGuestUser();
   const { showSuccess, showError, showWarning, showInfo } = useToast();
   const { 
     items: cartItems, 
@@ -129,22 +138,18 @@ export default function HomePage() {
     getTotalQuantity, 
     getItemQuantity, 
     clearCart, 
+    updateQuantity,
     wishlistItems, 
     addToWishlist, 
     removeFromWishlist,
     clearWishlist
   } = useCart();
-  const [formData, setFormData] = useState<EventDetailsFormData>({
-    name: '',
-    email: '',
-    pickupDate: null,
-    returnDate: null,
-    eventStartDate: null,
-    eventEndDate: null,
-  });
+  const [formData, setFormData] = useState<EventDetailsFormData>(() => emptyEventDetails());
   const [activeFilter, setActiveFilter] = useState<Category>('All');
   const [isBannerVisible, setIsBannerVisible] = useState(true);
   const submittingRef = useRef(false);
+  // Bumped after cancel/order changes so reservation badges refresh without a date change.
+  const [reservationRefreshKey, setReservationRefreshKey] = useState(0);
 
   // Event-details popup — only opened when the user asks (never blocks browsing or login).
   const [isEventDetailsOpen, setIsEventDetailsOpen] = useState(false);
@@ -167,9 +172,17 @@ export default function HomePage() {
     return () => clearInterval(timer);
   }, [submitCooldown]);
 
-  const validateEmail = (email: string) => {
-    return email.toLowerCase().endsWith('@vellummortgage.com');
-  };
+  // Auth/guest logout clears storage; also reset this page's in-memory identity.
+  useEffect(() => {
+    const onClear = () => {
+      setFormData(emptyEventDetails());
+      setUserReservationsByItemId({});
+      setDateAvailability({});
+      setIsEventDetailsOpen(false);
+    };
+    window.addEventListener(STOREFRONT_CLEAR_EVENT, onClear);
+    return () => window.removeEventListener(STOREFRONT_CLEAR_EVENT, onClear);
+  }, []);
 
   const fetchItems = async () => {
     try {
@@ -233,6 +246,7 @@ export default function HomePage() {
   }, []);
 
   // Auto-fill name/email from local profile cache when context hydrates after mount.
+  // Only fill blanks — never re-apply a cleared identity after logout.
   useEffect(() => {
     setFormData(prev => ({
       ...prev,
@@ -262,6 +276,31 @@ export default function HomePage() {
           next[row.itemId] = row;
         });
         setDateAvailability(next);
+
+        // Clamp cart lines that exceed newly reported free stock for this window.
+        rows.forEach(row => {
+          const inCart = getItemQuantity(row.itemId);
+          if (inCart > row.availableQuantity) {
+            if (row.availableQuantity > 0) {
+              updateQuantity(row.itemId, row.availableQuantity);
+              const overflow = inCart - row.availableQuantity;
+              const catalogItem = items.find(i => String(i.id) === row.itemId);
+              if (catalogItem && overflow > 0) {
+                addToWishlist(catalogItem, overflow);
+              }
+              showWarning(
+                `${catalogItem?.name || 'An item'} was adjusted for your new dates (${row.availableQuantity} available).`
+              );
+            } else {
+              removeFromCart(row.itemId);
+              const catalogItem = items.find(i => String(i.id) === row.itemId);
+              if (catalogItem) {
+                addToWishlist(catalogItem, inCart);
+                showWarning(`${catalogItem.name} is unavailable for these dates and moved to your wishlist.`);
+              }
+            }
+          }
+        });
       })
       .catch(err => {
         console.error('Failed to load date-aware availability', err);
@@ -274,7 +313,8 @@ export default function HomePage() {
     return () => {
       cancelled = true;
     };
-  }, [pickupDate, returnDate, items]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- clamp helpers are stable enough; avoid re-fetch loops
+  }, [pickupDate, returnDate, items, reservationRefreshKey]);
 
   const userEmail = formData.email.trim();
   useEffect(() => {
@@ -289,7 +329,17 @@ export default function HomePage() {
         if (cancelled) return;
         const next: Record<string, UserExistingReservation> = {};
         rows.forEach(row => {
-          next[row.itemId] = row;
+          // If multiple overlapping orders exist for one item, keep the first
+          // and accumulate quantity so the badge still blocks correctly.
+          const existing = next[row.itemId];
+          if (existing) {
+            next[row.itemId] = {
+              ...existing,
+              quantity: existing.quantity + row.quantity,
+            };
+          } else {
+            next[row.itemId] = row;
+          }
         });
         setUserReservationsByItemId(next);
       })
@@ -301,18 +351,55 @@ export default function HomePage() {
     return () => {
       cancelled = true;
     };
-  }, [pickupDate, returnDate, userEmail]);
+  }, [pickupDate, returnDate, userEmail, reservationRefreshKey]);
 
-  // Resolves the effective available quantity for an item, preferring the
-  // date-aware value when dates have been picked.
-  const getEffectiveAvailable = (item: PromoItem): number => {
-    const datesPicked = !!(formData.pickupDate && formData.returnDate);
-    if (!datesPicked) return item.available_quantity;
+  // Resolves free stock for the selected dates. Returns null while date-aware
+  // availability is still loading so the UI does not fall back to the stale
+  // static available_quantity column (global snapshot, not date-window stock).
+  const getEffectiveAvailable = (item: PromoItem): number | null => {
+    const datesArePicked = !!(formData.pickupDate && formData.returnDate);
+    if (!datesArePicked) return item.available_quantity;
     const row = dateAvailability[String(item.id)];
-    return row ? row.availableQuantity : item.available_quantity;
+    if (!row) return null;
+    return row.availableQuantity;
   };
 
   const datesPicked = !!(formData.pickupDate && formData.returnDate);
+
+  const handleClearStorefrontIdentity = () => {
+    clearStorefrontSession();
+    setFormData(emptyEventDetails());
+    setUserReservationsByItemId({});
+    setDateAvailability({});
+  };
+
+  const handleRequesterEmailChange = (email: string) => {
+    const trimmed = email.trim();
+    if (!isVellumEmail(trimmed)) {
+      showError('Please use your @vellummortgage.com email address');
+      return false;
+    }
+    const previous = formData.email.trim().toLowerCase();
+    const next = trimmed.toLowerCase();
+    setGuestEmail(trimmed);
+    setFormData(prev => {
+      const updated = { ...prev, email: trimmed };
+      persistEventDetails(updated);
+      return updated;
+    });
+    // Switching requester identity must not keep the previous LO's draft cart.
+    if (previous && previous !== next) {
+      clearCart();
+      clearWishlist();
+      setUserReservationsByItemId({});
+      setReservationRefreshKey(k => k + 1);
+    }
+    return true;
+  };
+
+  const handleOrdersChanged = () => {
+    setReservationRefreshKey(k => k + 1);
+  };
 
   const handleSubmit = async () => {
     // Guard: ignore if already submitting or in cooldown period
@@ -323,7 +410,7 @@ export default function HomePage() {
       return;
     }
     
-    if (!validateEmail(formData.email)) {
+    if (!isVellumEmail(formData.email)) {
       showError('Please use your @vellummortgage.com email address');
       return;
     }
@@ -442,11 +529,14 @@ export default function HomePage() {
         }
       }
 
+      let orderReplayed = false;
+
       if (cartItems.length > 0) {
         try {
           const orderResult = await createOrderAtomic(orderFormData, cartItems, 'pending', idempotencyKey);
           orderId = orderResult.orderId;
           orderNumber = orderResult.orderNumber;
+          orderReplayed = orderResult.replayed;
           orderSuccessful = true;
         } catch (rpcErr) {
           // Race condition (#14): another order grabbed inventory between our
@@ -464,14 +554,16 @@ export default function HomePage() {
         const orderResult = await createOrderAtomic(orderFormData, [], 'wishlist_only', idempotencyKey);
         orderId = orderResult.orderId;
         orderNumber = orderResult.orderNumber;
+        orderReplayed = orderResult.replayed;
       }
 
-      if (wishlistToSubmit.length > 0 && orderId) {
+      if (wishlistToSubmit.length > 0 && orderId && !orderReplayed) {
         await saveWishlistItems(orderId, wishlistToSubmit, orderFormData);
         wishlistSaved = true;
       }
 
-      if ((orderSuccessful || wishlistSaved) && orderId) {
+      // Skip side effects on idempotent replay so retries don't re-email / re-webhook.
+      if ((orderSuccessful || wishlistSaved) && orderId && !orderReplayed) {
         await sendOrderNotifications(orderId, orderNumber, orderFormData, cartItems, wishlistToSubmit);
         
         if (orderSuccessful) {
@@ -497,6 +589,7 @@ export default function HomePage() {
       setIsEventDetailsOpen(false);
       clearCart();
       clearWishlist();
+      setReservationRefreshKey(k => k + 1);
       await fetchItems();
 
       // Rotate idempotency key only after a confirmed successful submission.
@@ -525,12 +618,20 @@ export default function HomePage() {
   };
 
   const handleEventDetailsSubmit = (values: EventDetailsFormData) => {
+    const previousEmail = formData.email.trim().toLowerCase();
+    const nextEmail = values.email.trim().toLowerCase();
     setFormData(values);
     persistEventDetails(values);
     const trimmedName = values.name.trim();
     const trimmedEmail = values.email.trim();
     if (trimmedName) setGuestName(trimmedName);
     if (trimmedEmail) setGuestEmail(trimmedEmail);
+    if (previousEmail && nextEmail && previousEmail !== nextEmail) {
+      clearCart();
+      clearWishlist();
+      setUserReservationsByItemId({});
+    }
+    setReservationRefreshKey(k => k + 1);
     setIsEventDetailsOpen(false);
   };
 
@@ -567,29 +668,41 @@ export default function HomePage() {
 
       let addedToCart = 0;
       let addedToWishlist = 0;
+      let blockedByOwn = 0;
 
-      reorderItems.forEach(reorderItem => {
+      for (const reorderItem of reorderItems) {
         const itemData = currentItems?.find(item => item.id === reorderItem.id);
-        if (itemData) {
-          const availableQuantity = getEffectiveAvailable(itemData);
-          const requestedQuantity = reorderItem.quantity;
-          
-          if (availableQuantity > 0) {
-            const quantityToAdd = Math.min(requestedQuantity, availableQuantity);
-            addToCart(itemData, quantityToAdd);
-            addedToCart++;
-            
-            // Add remainder to wishlist if needed
-            if (requestedQuantity > availableQuantity) {
-              addToWishlist(itemData, requestedQuantity - availableQuantity);
-              addedToWishlist++;
-            }
-          } else {
-            addToWishlist(itemData, requestedQuantity);
+        if (!itemData) continue;
+
+        const ownReservation = userReservationsByItemId[String(itemData.id)];
+        if (ownReservation) {
+          blockedByOwn++;
+          showInfo(formatReservationMessage(ownReservation, itemData.name));
+          continue;
+        }
+
+        const availableQuantity = getEffectiveAvailable(itemData);
+        const requestedQuantity = reorderItem.quantity;
+
+        if (availableQuantity === null) {
+          showWarning('Pick event dates before reordering so we can check availability.');
+          return;
+        }
+
+        if (availableQuantity > 0) {
+          const quantityToAdd = Math.min(requestedQuantity, availableQuantity);
+          addToCart(itemData, quantityToAdd);
+          addedToCart++;
+
+          if (requestedQuantity > availableQuantity) {
+            addToWishlist(itemData, requestedQuantity - availableQuantity);
             addedToWishlist++;
           }
+        } else {
+          addToWishlist(itemData, requestedQuantity);
+          addedToWishlist++;
         }
-      });
+      }
 
       if (addedToCart > 0 && addedToWishlist > 0) {
         showInfo(`${addedToCart} item(s) added to cart, ${addedToWishlist} to wishlist (limited availability).`);
@@ -597,6 +710,8 @@ export default function HomePage() {
         showSuccess('Items added to your cart! Review and submit when ready.');
       } else if (addedToWishlist > 0) {
         showWarning('Items are currently unavailable and have been added to your wishlist.');
+      } else if (blockedByOwn > 0) {
+        showInfo('Those items are already on one of your active orders.');
       }
     } catch (err) {
       showError('Failed to add items. Please try again.');
@@ -675,10 +790,17 @@ export default function HomePage() {
               filteredItems.map((item) => {
                 const cartQuantity = getItemQuantity(String(item.id));
                 const effectiveAvailable = getEffectiveAvailable(item);
-                const isOutOfStock = datesPicked && effectiveAvailable <= 0;
-                const hasConflicts = datesPicked && effectiveAvailable < item.total_quantity;
+                const availabilityKnown = !datesPicked || effectiveAvailable !== null;
+                const isOutOfStock = datesPicked && effectiveAvailable !== null && effectiveAvailable <= 0;
+                const hasConflicts =
+                  datesPicked &&
+                  effectiveAvailable !== null &&
+                  effectiveAvailable < item.total_quantity;
                 const ownReservation = userReservationsByItemId[String(item.id)];
-                const blockedByOwnOrder = isOutOfStock && !!ownReservation;
+                // Block add when this LO already holds the item and nothing else is free
+                // for the window — prevents a second "order" for the same tent/etc.
+                const blockedByOwnOrder = !!ownReservation && isOutOfStock;
+                const freeForDates = effectiveAvailable ?? 0;
                 return (
                   <div key={item.id} className="bg-white rounded-xl shadow-lg overflow-hidden flex flex-col">
                     <div className="aspect-square relative">
@@ -713,19 +835,20 @@ export default function HomePage() {
                             <>
                               <p>
                                 Available for your dates:{' '}
-                                <span className={`font-semibold ${effectiveAvailable === 0 ? 'text-red-600' : 'text-gray-900'}`}>
-                                  {availabilityLoading && dateAvailability[String(item.id)] === undefined
+                                <span className={`font-semibold ${isOutOfStock ? 'text-red-600' : 'text-gray-900'}`}>
+                                  {!availabilityKnown || (availabilityLoading && effectiveAvailable === null)
                                     ? '…'
-                                    : effectiveAvailable}
+                                    : freeForDates}
                                 </span>
                                 {' '}of {item.total_quantity}
                               </p>
                               {ownReservation && (
                                 <p className="mt-1 text-xs font-medium text-[#0075AE]">
                                   On your order {ownReservation.orderNumber || '—'}
+                                  {ownReservation.quantity > 1 ? ` (${ownReservation.quantity})` : ''}
                                 </p>
                               )}
-                              {hasConflicts && !ownReservation && (
+                              {hasConflicts && !ownReservation && effectiveAvailable !== null && (
                                 <div className="mt-1">
                                   <AvailabilityInfo
                                     itemId={String(item.id)}
@@ -767,19 +890,27 @@ export default function HomePage() {
                           className={`flex-1 px-4 py-2 rounded-lg transition-colors text-white ${
                             !datesPicked
                               ? 'bg-gray-500 hover:bg-gray-600'
-                              : blockedByOwnOrder
-                                ? 'bg-gray-400 cursor-not-allowed'
-                                : isOutOfStock
-                                  ? 'bg-orange-500 hover:bg-orange-600'
-                                  : 'bg-[#0075AE] hover:bg-[#005f8c] disabled:opacity-50 disabled:cursor-not-allowed'
+                              : !availabilityKnown
+                                ? 'bg-gray-400 cursor-wait'
+                                : blockedByOwnOrder
+                                  ? 'bg-gray-400 cursor-not-allowed'
+                                  : isOutOfStock
+                                    ? 'bg-orange-500 hover:bg-orange-600'
+                                    : 'bg-[#0075AE] hover:bg-[#005f8c] disabled:opacity-50 disabled:cursor-not-allowed'
                            }`}
                           disabled={
                             blockedByOwnOrder ||
-                            (datesPicked && !isOutOfStock && cartQuantity >= effectiveAvailable)
+                            !availabilityKnown ||
+                            (datesPicked && !isOutOfStock && cartQuantity >= freeForDates)
                           }
                           onClick={() => {
                             if (!datesPicked) {
                               openEventDetailsModal();
+                              return;
+                            }
+
+                            if (!availabilityKnown || effectiveAvailable === null) {
+                              showInfo('Checking availability for your dates…');
                               return;
                             }
 
@@ -821,11 +952,13 @@ export default function HomePage() {
                         >
                           {!datesPicked
                             ? 'Request'
-                            : blockedByOwnOrder
-                              ? 'On Your Order'
-                              : isOutOfStock
-                                ? 'Add to Wishlist'
-                                : (cartQuantity >= effectiveAvailable ? 'Max in Cart' : 'Add to Cart')}
+                            : !availabilityKnown
+                              ? 'Checking…'
+                              : blockedByOwnOrder
+                                ? 'On Your Order'
+                                : isOutOfStock
+                                  ? 'Add to Wishlist'
+                                  : (cartQuantity >= freeForDates ? 'Max in Cart' : 'Add to Cart')}
                         </button>
                       </div>
                     </div>
@@ -870,6 +1003,9 @@ export default function HomePage() {
         removeFromWishlist={removeFromWishlist}
         onReorderItems={handleReorderItems}
         dateAvailability={dateAvailability}
+        onClearIdentity={handleClearStorefrontIdentity}
+        onRequesterEmailChange={handleRequesterEmailChange}
+        onOrdersChanged={handleOrdersChanged}
       />
 
       {isEventDetailsOpen && (

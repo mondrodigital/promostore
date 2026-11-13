@@ -1,4 +1,10 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import {
+  GUEST_EMAIL_STORAGE_KEY,
+  GUEST_NAME_STORAGE_KEY,
+  STOREFRONT_CLEAR_EVENT,
+  requestStorefrontSessionClear,
+} from '../lib/storefrontSession';
 
 interface GuestUserContextType {
   guestEmail: string | null;
@@ -7,13 +13,12 @@ interface GuestUserContextType {
   setGuestName: (name: string | null) => void;
   clearGuestEmail: () => void;
   clearGuestProfile: () => void;
+  /** Clears guest profile, cart, wishlist, and event-details session for a full identity switch. */
+  clearStorefrontSession: () => void;
   isGuestEmailSet: boolean;
 }
 
 const GuestUserContext = createContext<GuestUserContextType | undefined>(undefined);
-
-const GUEST_EMAIL_STORAGE_KEY = 'vellum_guest_email';
-const GUEST_NAME_STORAGE_KEY = 'vellum_guest_name';
 
 export function GuestUserProvider({ children }: { children: React.ReactNode }) {
   const [guestEmail, setGuestEmailState] = useState<string | null>(null);
@@ -35,8 +40,17 @@ export function GuestUserProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // Save to localStorage whenever it changes
-  const setGuestEmail = (email: string | null) => {
+  // Reset in-memory guest state when any caller requests a full storefront clear.
+  useEffect(() => {
+    const onClear = () => {
+      setGuestEmailState(null);
+      setGuestNameState(null);
+    };
+    window.addEventListener(STOREFRONT_CLEAR_EVENT, onClear);
+    return () => window.removeEventListener(STOREFRONT_CLEAR_EVENT, onClear);
+  }, []);
+
+  const setGuestEmail = useCallback((email: string | null) => {
     setGuestEmailState(email);
     try {
       if (email) {
@@ -47,9 +61,9 @@ export function GuestUserProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error('Error saving guest email to storage:', error);
     }
-  };
+  }, []);
 
-  const setGuestName = (name: string | null) => {
+  const setGuestName = useCallback((name: string | null) => {
     setGuestNameState(name);
     try {
       if (name) {
@@ -60,16 +74,20 @@ export function GuestUserProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error('Error saving guest name to storage:', error);
     }
-  };
+  }, []);
 
-  const clearGuestEmail = () => {
+  const clearGuestEmail = useCallback(() => {
     setGuestEmail(null);
-  };
+  }, [setGuestEmail]);
 
-  const clearGuestProfile = () => {
+  const clearGuestProfile = useCallback(() => {
     setGuestEmail(null);
     setGuestName(null);
-  };
+  }, [setGuestEmail, setGuestName]);
+
+  const clearStorefrontSession = useCallback(() => {
+    requestStorefrontSessionClear();
+  }, []);
 
   const value = {
     guestEmail,
@@ -78,6 +96,7 @@ export function GuestUserProvider({ children }: { children: React.ReactNode }) {
     setGuestName,
     clearGuestEmail,
     clearGuestProfile,
+    clearStorefrontSession,
     isGuestEmailSet: guestEmail !== null,
   };
 
@@ -95,4 +114,3 @@ export function useGuestUser() {
   }
   return context;
 }
-

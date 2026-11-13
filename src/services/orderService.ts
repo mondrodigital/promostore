@@ -365,7 +365,7 @@ export async function createOrderAtomic(
   cartItems: CartItem[],
   status: 'pending' | 'wishlist_only' = 'pending',
   idempotencyKey?: string,
-): Promise<{ orderId: string; orderNumber: string | null }> {
+): Promise<{ orderId: string; orderNumber: string | null; replayed: boolean }> {
   const items = cartItems.map(item => ({
     item_id: item.id,
     quantity: item.requestedQuantity,
@@ -400,9 +400,13 @@ export async function createOrderAtomic(
     throw new Error(response.message || 'Order creation failed');
   }
 
+  const message = (response.message || '').toLowerCase();
+  const replayed = message.includes('idempotent replay');
+
   return {
     orderId: response.order_id,
     orderNumber: response.order_number || null,
+    replayed,
   };
 }
 

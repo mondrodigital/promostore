@@ -1,6 +1,11 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import type { PromoItem, CartItem } from '../types';
 import { useToast } from './ToastContext';
+import {
+  CART_STORAGE_KEY,
+  STOREFRONT_CLEAR_EVENT,
+  WISHLIST_STORAGE_KEY,
+} from '../lib/storefrontSession';
 
 interface CartContextType {
   items: CartItem[];
@@ -14,6 +19,7 @@ interface CartContextType {
   addToWishlist: (item: PromoItem, quantity: number) => void;
   removeFromWishlist: (itemId: string) => void;
   clearWishlist: () => void;
+  clearAllRequests: () => void;
   getWishlistItemQuantity: (itemId: string) => number;
   getTotalWishlistQuantity: () => number;
 }
@@ -21,8 +27,6 @@ interface CartContextType {
 const CartContext = createContext<CartContextType | undefined>(undefined);
 
 const CART_VERSION = 1;
-const CART_STORAGE_KEY = 'lo_cart_v1';
-const WISHLIST_STORAGE_KEY = 'lo_wishlist_v1';
 const CART_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 interface StoredCart {
@@ -107,6 +111,16 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     saveToLocalStorage(WISHLIST_STORAGE_KEY, wishlistItems);
   }, [wishlistItems]);
 
+  // Drop in-memory cart/wishlist when auth/guest identity is cleared.
+  useEffect(() => {
+    const onClear = () => {
+      setItems([]);
+      setWishlistItems([]);
+    };
+    window.addEventListener(STOREFRONT_CLEAR_EVENT, onClear);
+    return () => window.removeEventListener(STOREFRONT_CLEAR_EVENT, onClear);
+  }, []);
+
   const addToCart = useCallback((item: PromoItem, quantity: number) => {
     setItems(prevItems => {
       const existingItem = prevItems.find(i => String(i.id) === String(item.id));
@@ -175,6 +189,13 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     localStorage.removeItem(WISHLIST_STORAGE_KEY);
   }, []);
 
+  const clearAllRequests = useCallback(() => {
+    setItems([]);
+    setWishlistItems([]);
+    localStorage.removeItem(CART_STORAGE_KEY);
+    localStorage.removeItem(WISHLIST_STORAGE_KEY);
+  }, []);
+
   const getWishlistItemQuantity = useCallback((itemId: string): number => {
     const item = wishlistItems.find(i => String(i.id) === itemId);
     return item ? item.requestedQuantity : 0;
@@ -196,6 +217,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     addToWishlist,
     removeFromWishlist,
     clearWishlist,
+    clearAllRequests,
     getWishlistItemQuantity,
     getTotalWishlistQuantity,
   };

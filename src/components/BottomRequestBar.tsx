@@ -33,6 +33,12 @@ interface BottomRequestBarProps {
   // Used to surface a non-blocking "heads up — N also reserved for these dates"
   // note next to cart items (issue #9). Empty / unused when dates not yet picked.
   dateAvailability?: Record<string, DateAwareAvailability>;
+  /** Full identity reset (guest email, event details, cart, reservation badges). */
+  onClearIdentity: () => void;
+  /** Sync history-prompt email into the shared requester identity. Returns false if invalid. */
+  onRequesterEmailChange: (email: string) => boolean;
+  /** Called after cancel/extension so the storefront can refresh "On your order" badges. */
+  onOrdersChanged?: () => void;
 }
 
 export default function BottomRequestBar({
@@ -49,15 +55,23 @@ export default function BottomRequestBar({
   removeFromWishlist,
   onReorderItems,
   dateAvailability,
+  onClearIdentity,
+  onRequesterEmailChange,
+  onOrdersChanged,
 }: BottomRequestBarProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [modalType, setModalType] = useState<'cart' | 'email_prompt' | null>(null);
   const [showOrderHistory, setShowOrderHistory] = useState(false);
   const [emailPromptInput, setEmailPromptInput] = useState('');
-  const { guestEmail, setGuestEmail, clearGuestProfile } = useGuestUser();
+  const [emailPromptError, setEmailPromptError] = useState<string | null>(null);
+  const { guestEmail } = useGuestUser();
 
   const totalCartQuantity = getTotalQuantity();
-  const totalItems = totalCartQuantity + wishlistItems.length;
+  const totalWishlistQuantity = wishlistItems.reduce(
+    (sum, item) => sum + (item.requestedQuantity || 0),
+    0,
+  );
+  const totalItems = totalCartQuantity + totalWishlistQuantity;
 
   const isFormComplete = () => {
     return (
@@ -90,26 +104,39 @@ export default function BottomRequestBar({
   };
 
   const handleHistoryClick = () => {
-    if (guestEmail) {
+    // Prefer the shared form email (same identity used for "On your order" badges).
+    const requesterEmail = formData.email.trim() || guestEmail || '';
+    if (requesterEmail) {
+      if (!guestEmail || guestEmail.toLowerCase() !== requesterEmail.toLowerCase()) {
+        onRequesterEmailChange(requesterEmail);
+      }
       setShowOrderHistory(true);
     } else {
       setModalType('email_prompt');
       setEmailPromptInput('');
+      setEmailPromptError(null);
     }
   };
 
   const handleEmailPromptSubmit = () => {
-    if (emailPromptInput.trim()) {
-      setGuestEmail(emailPromptInput.trim());
-      setModalType(null);
-      setShowOrderHistory(true);
+    const trimmed = emailPromptInput.trim();
+    if (!trimmed) return;
+    const ok = onRequesterEmailChange(trimmed);
+    if (!ok) {
+      setEmailPromptError('Please use your @vellummortgage.com email address');
+      return;
     }
+    setEmailPromptError(null);
+    setModalType(null);
+    setShowOrderHistory(true);
   };
 
   const handleSignOut = () => {
-    clearGuestProfile();
+    onClearIdentity();
     setShowOrderHistory(false);
   };
+
+  const historyEmail = formData.email.trim() || guestEmail || '';
 
   const formatRange = (start: Date | null, end: Date | null) => {
     if (!start) return 'Not set';
@@ -287,8 +314,8 @@ export default function BottomRequestBar({
                     <ShoppingCart className="h-5 w-5 text-gray-600" />
                     <span className="text-sm font-medium text-gray-700">
                       {totalCartQuantity > 0 && `${totalCartQuantity} checkout item${totalCartQuantity > 1 ? 's' : ''}`}
-                      {totalCartQuantity > 0 && wishlistItems.length > 0 && ', '}
-                      {wishlistItems.length > 0 && `${wishlistItems.length} wishlist item${wishlistItems.length > 1 ? 's' : ''}`}
+                      {totalCartQuantity > 0 && totalWishlistQuantity > 0 && ', '}
+                      {totalWishlistQuantity > 0 && `${totalWishlistQuantity} wishlist item${totalWishlistQuantity > 1 ? 's' : ''}`}
                       {totalItems === 0 && 'No items added yet'}
                     </span>
                   </div>
@@ -484,6 +511,9 @@ export default function BottomRequestBar({
                       autoFocus
                     />
                   </div>
+                  {emailPromptError && (
+                    <p className="text-sm text-red-600 text-center">{emailPromptError}</p>
+                  )}
                   <button
                     onClick={handleEmailPromptSubmit}
                     disabled={!emailPromptInput.trim()}
@@ -492,7 +522,7 @@ export default function BottomRequestBar({
                     View Order History
                   </button>
                   <p className="text-xs text-gray-500 text-center">
-                    Your email will be saved locally for convenience
+                    Use your @vellummortgage.com email. It will be saved locally for convenience.
                   </p>
                 </div>
               </>
@@ -502,13 +532,14 @@ export default function BottomRequestBar({
       )}
 
       {/* Order History Modal */}
-      {showOrderHistory && guestEmail && (
+      {showOrderHistory && historyEmail && (
         <OrderHistoryModal
           isOpen={showOrderHistory}
           onClose={() => setShowOrderHistory(false)}
-          userEmail={guestEmail}
+          userEmail={historyEmail}
           onReorder={onReorderItems}
           onSignOut={handleSignOut}
+          onOrdersChanged={onOrdersChanged}
         />
       )}
     </>

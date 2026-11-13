@@ -101,6 +101,9 @@ export default function ItemCalendar({ itemId, itemName }: ItemCalendarProps) {
       const startDate = format(startOfMonth(currentDate), 'yyyy-MM-dd');
       const endDate = format(endOfMonth(addMonths(currentDate, 1)), 'yyyy-MM-dd');
 
+      // Overlap with the visible calendar window:
+      // checkout_date <= windowEnd AND return_date >= windowStart
+      // (previous gte/lte pair missed bookings that started before the window).
       const { data, error: fetchError } = await supabase
         .from('orders')
         .select(`
@@ -114,9 +117,10 @@ export default function ItemCalendar({ itemId, itemName }: ItemCalendarProps) {
           )
         `)
         .eq('checkouts.item_id', itemId)
-        .gte('checkout_date', startDate)
-        .lte('return_date', endDate)
-        .not('status', 'eq', 'cancelled');
+        .lte('checkout_date', endDate)
+        .gte('return_date', startDate)
+        .neq('status', 'cancelled')
+        .neq('status', 'wishlist_only');
 
       if (fetchError) throw fetchError;
 
