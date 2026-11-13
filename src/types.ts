@@ -34,7 +34,7 @@ export interface Order {
   checkout_date: string | null;
   return_date: string | null;
   created_at: string;
-  status: 'pending' | 'picked_up' | 'returned' | 'cancelled' | 'wishlist_only';
+  status: 'pending' | 'picked_up' | 'returned' | 'cancelled' | 'wishlist_only' | 'rejected';
   items: OrderItem[];
 }
 

@@ -1,83 +1,61 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-
-const POWER_AUTOMATE_WEBHOOK_URL = "https://defaultc0ced471202d4d63b96319c9821d50.c7.environment.api.powerplatform.com:443/powerautomate/automations/direct/workflows/0dfbaaa1c2b443999557006fbfd5dbc2/triggers/manual/paths/invoke/?api-version=1&tenantId=tId&environmentId=Default-c0ced471-202d-4d63-b963-19c9821d50c7&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=R89nz1jC5Av8ZAQENcxG9YZrqFImY1KR6isKN8UPZGk";
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import {
+  deliverPowerAutomateWebhook,
+  type PowerAutomatePayload,
+} from '../_shared/power-automate.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS'
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
 serve(async (req) => {
-  // Handle preflight requests
   if (req.method === 'OPTIONS') {
-    return new Response(null, {
-      headers: corsHeaders
-    });
+    return new Response(null, { headers: corsHeaders });
   }
 
   if (req.method !== 'POST') {
     return new Response('Method not allowed', {
       status: 405,
-      headers: corsHeaders
+      headers: corsHeaders,
     });
   }
+
+  const supabaseAdmin = createClient(
+    Deno.env.get('PROJECT_SUPABASE_URL') ?? Deno.env.get('SUPABASE_URL') ?? '',
+    Deno.env.get('PROJECT_SUPABASE_SERVICE_ROLE_KEY') ?? Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+  );
 
   try {
-    const payload = await req.json();
-    console.log('Received payload:', payload);
-    
-    // Clean, structured data for Power Automate
-    const webhookData = {
-      orderId: payload.orderId,
-      customerName: payload.customerName,
-      customerEmail: payload.customerEmail,
-      pickupDate: payload.pickupDate,
-      returnDate: payload.returnDate,
-      eventStartDate: payload.eventStartDate,
-      eventEndDate: payload.eventEndDate
-    };
+    const payload = (await req.json()) as PowerAutomatePayload;
+    console.log('send-power-automate-webhook received payload:', payload);
 
-    console.log('Sending to Power Automate:', webhookData);
+    const result = await deliverPowerAutomateWebhook(supabaseAdmin, payload);
 
-    // Send to Power Automate
-    const response = await fetch(POWER_AUTOMATE_WEBHOOK_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
+    return new Response(
+      JSON.stringify({
+        success: result.success,
+        attempts: result.attempts,
+        status: result.status,
+        powerAutomateResponse: result.responseText,
+        error: result.errorMessage,
+      }),
+      {
+        status: result.success ? 200 : 502,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders },
       },
-      body: JSON.stringify(webhookData)
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Power Automate error:', response.status, errorText);
-      throw new Error(`Power Automate webhook failed: ${response.status} - ${errorText}`);
-    }
-
-    const result = await response.text();
-    console.log('Power Automate success:', result);
-
-    return new Response(JSON.stringify({
-      success: true,
-      powerAutomateResponse: result
-    }), {
-      headers: {
-        'Content-Type': 'application/json',
-        ...corsHeaders
-      }
-    });
-
+    );
   } catch (error) {
-    console.error('Webhook error:', error);
-    return new Response(JSON.stringify({
-      error: error.message
-    }), {
-      status: 500,
-      headers: {
-        'Content-Type': 'application/json',
-        ...corsHeaders
-      }
-    });
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('send-power-automate-webhook unexpected error:', message);
+    return new Response(
+      JSON.stringify({ success: false, error: message }),
+      {
+        status: 500,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders },
+      },
+    );
   }
-}); 
+});

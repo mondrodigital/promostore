@@ -15,15 +15,15 @@ function App() {
       <BrowserRouter>
         <AuthProvider>
           <GuestUserProvider>
-            <CartProvider>
-              <ToastProvider>
+            <ToastProvider>
+              <CartProvider>
                 <Routes>
                   <Route path="/" element={<HomePage />} />
                   <Route path="/admin" element={<AdminDashboard />} />
                   <Route path="/login" element={<Login />} />
                 </Routes>
-              </ToastProvider>
-            </CartProvider>
+              </CartProvider>
+            </ToastProvider>
           </GuestUserProvider>
         </AuthProvider>
       </BrowserRouter>
