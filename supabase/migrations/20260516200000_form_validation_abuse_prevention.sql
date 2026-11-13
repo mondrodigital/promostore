@@ -73,7 +73,7 @@ BEGIN
         event_start_date IS NULL
         OR checkout_date  IS NULL
         OR checkout_date <= event_start_date
-      );
+      ) NOT VALID;
   END IF;
 END;
 $$;
@@ -92,7 +92,7 @@ BEGIN
         event_end_date IS NULL
         OR return_date IS NULL
         OR return_date >= event_end_date
-      );
+      ) NOT VALID;
   END IF;
 END;
 $$;
@@ -113,7 +113,7 @@ BEGIN
         checkout_date IS NULL
         OR return_date IS NULL
         OR (return_date - checkout_date) <= 14
-      );
+      ) NOT VALID;
   END IF;
 END;
 $$;
