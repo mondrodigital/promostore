@@ -1,26 +1,30 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
+import { isAppAdmin } from '../lib/admin';
 import { LogIn } from 'lucide-react';
 
 function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
   const [loading, setLoading] = useState(false);
+  const [mode, setMode] = useState<'sign-in' | 'forgot'>('sign-in');
   const navigate = useNavigate();
 
   useEffect(() => {
     const checkSession = async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user?.user_metadata?.is_admin) {
+      if (isAppAdmin(session?.user)) {
         navigate('/admin');
       }
     };
     checkSession();
     
     const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_IN' && session?.user?.user_metadata?.is_admin) {
+      if (event === 'PASSWORD_RECOVERY') return;
+      if (event === 'SIGNED_IN' && isAppAdmin(session?.user)) {
         navigate('/admin');
       }
     });
@@ -52,7 +56,7 @@ function Login() {
         return;
       }
 
-      if (!data?.user?.user_metadata?.is_admin) {
+      if (!isAppAdmin(data?.user)) {
         await supabase.auth.signOut();
         setError('Access denied. You must be an administrator.');
         return;
@@ -61,6 +65,34 @@ function Login() {
     } catch (error: any) {
       console.error('Login error:', error);
       setError('An unexpected error occurred. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleForgotPassword(e: React.FormEvent) {
+    e.preventDefault();
+    if (!email) {
+      setError('Enter your admin email address.');
+      return;
+    }
+
+    try {
+      setError('');
+      setInfo('');
+      setLoading(true);
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+      if (resetError) {
+        setError(resetError.message);
+        return;
+      }
+      setInfo('If that email is an admin account, a reset link is on its way.');
+      setMode('sign-in');
+    } catch (err) {
+      console.error('Password reset request failed:', err);
+      setError('Could not send a reset link. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -81,10 +113,15 @@ function Login() {
           </p>
         </div>
         
-        <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
+        <form className="mt-8 space-y-6" onSubmit={mode === 'forgot' ? handleForgotPassword : handleSubmit}>
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded">
               {error}
+            </div>
+          )}
+          {info && (
+            <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded">
+              {info}
             </div>
           )}
           
@@ -104,21 +141,23 @@ function Login() {
                 className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
               />
             </div>
-            <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700">
-                Password
-              </label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                autoComplete="current-password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-              />
-            </div>
+            {mode === 'sign-in' && (
+              <div>
+                <label htmlFor="password" className="block text-sm font-medium text-gray-700">
+                  Password
+                </label>
+                <input
+                  id="password"
+                  name="password"
+                  type="password"
+                  autoComplete="current-password"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                />
+              </div>
+            )}
           </div>
 
           <div>
@@ -127,7 +166,23 @@ function Login() {
               disabled={loading}
               className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {loading ? 'Signing in...' : 'Sign in'}
+              {loading
+                ? 'Please wait...'
+                : mode === 'forgot'
+                  ? 'Send reset link'
+                  : 'Sign in'}
+            </button>
+          </div>
+          <div className="text-center">
+            <button
+              type="button"
+              onClick={() => {
+                setMode(mode === 'forgot' ? 'sign-in' : 'forgot');
+                setError('');
+              }}
+              className="text-sm text-indigo-600 hover:text-indigo-500"
+            >
+              {mode === 'forgot' ? 'Back to sign in' : 'Forgot password?'}
             </button>
           </div>
         </form>

@@ -3,6 +3,7 @@ import DatePicker from 'react-datepicker';
 import { format } from 'date-fns';
 import { Search, X, ShoppingCart } from 'lucide-react';
 import type { CartItem } from '../types';
+import { startOfToday } from '../lib/dates';
 
 interface TopBookingBarProps {
   formData: {
@@ -178,7 +179,7 @@ export default function TopBookingBar({
                       selectsRange={true}
                       inline
                       monthsShown={2}
-                      minDate={new Date()}
+                      minDate={startOfToday()}
                    />
                 </>
              )}

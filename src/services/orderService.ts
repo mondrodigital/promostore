@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabase';
-import type { CartItem, PromoItem } from '../types';
+import type { CartItem } from '../types';
 
 export interface OrderFormData {
   name: string;
@@ -81,7 +81,8 @@ export async function validateCartAvailability(cartItems: CartItem[]): Promise<V
 export async function createOrderAtomic(
   formData: OrderFormData,
   cartItems: CartItem[],
-  status: 'pending' | 'wishlist_only' = 'pending'
+  status: 'pending' | 'wishlist_only' = 'pending',
+  idempotencyKey?: string
 ): Promise<{ orderId: string; orderNumber: string | null }> {
   const items = cartItems.map(item => ({
     item_id: item.id,
@@ -96,7 +97,8 @@ export async function createOrderAtomic(
     p_event_start_date: formData.eventStartDate ? formatDateLocal(formData.eventStartDate) : null,
     p_event_end_date: formData.eventEndDate ? formatDateLocal(formData.eventEndDate) : null,
     p_items: items,
-    p_status: status
+    p_status: status,
+    p_idempotency_key: idempotencyKey ?? null
   });
 
   if (error) {
@@ -176,30 +178,5 @@ export async function sendOrderNotifications(
     await supabase.functions.invoke('send-user-confirmation', { body: notificationPayload });
   } catch (e) {
     console.error('Failed to send user confirmation:', e);
-  }
-}
-
-/**
- * Sends Power Automate webhook
- */
-export async function sendPowerAutomateWebhook(
-  orderId: string,
-  orderNumber: string | null,
-  formData: OrderFormData
-): Promise<void> {
-  const powerAutomatePayload = {
-    orderId: orderNumber || orderId,
-    customerName: formData.name,
-    customerEmail: formData.email,
-    pickupDate: formData.pickupDate ? formatDateLocal(formData.pickupDate) : null,
-    returnDate: formData.returnDate ? formatDateLocal(formData.returnDate) : null,
-    eventStartDate: formData.eventStartDate ? formatDateLocal(formData.eventStartDate) : null,
-    eventEndDate: formData.eventEndDate ? formatDateLocal(formData.eventEndDate) : null
-  };
-
-  try {
-    await supabase.functions.invoke('send-power-automate-webhook', { body: powerAutomatePayload });
-  } catch (e) {
-    console.error('Power Automate webhook failed:', e);
   }
 }

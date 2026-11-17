@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Search, Filter, Trash2, RefreshCw, ChevronDown } from 'lucide-react';
 import OrderCard, { OrderWithDetails } from './OrderCard';
+import ExtensionReview from './ExtensionReview';
 import type { Order } from '../../types';
 
 type StatusFilter = 'all' | Order['status'];
@@ -23,6 +24,7 @@ interface OrdersViewProps {
   ) => void;
   processingOrders: Set<string>;
   getAvailableStatuses: (status: Order['status']) => Order['status'][];
+  onReviewExtension: (orderId: string, approve: boolean, note: string) => Promise<void>;
 }
 
 const statusOptions: { value: StatusFilter; label: string }[] = [
@@ -44,7 +46,8 @@ export default function OrdersView({
   onDeleteSelected,
   onFulfillWishlist,
   processingOrders,
-  getAvailableStatuses
+  getAvailableStatuses,
+  onReviewExtension
 }: OrdersViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
@@ -113,6 +116,7 @@ export default function OrdersView({
     }
   };
 
+  const pendingExtensions = orders.filter((order) => order.extension_status === 'pending');
   const activeCount = orders.filter(o => o.status === 'pending' || o.status === 'picked_up').length;
   const wishlistCount = orders.filter(o => o.status === 'wishlist_only').length;
 
@@ -240,6 +244,23 @@ export default function OrdersView({
           </div>
         )}
       </div>
+
+      {pendingExtensions.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-lg font-semibold text-gray-900">
+            Pending extensions
+            <span className="ml-2 text-sm font-normal text-gray-500">({pendingExtensions.length})</span>
+          </h2>
+          {pendingExtensions.map((order) => (
+            <ExtensionReview
+              key={order.id}
+              order={order}
+              disabled={processingOrders.has(order.id)}
+              onReview={onReviewExtension}
+            />
+          ))}
+        </div>
+      )}
 
       {/* Error State */}
       {error && (

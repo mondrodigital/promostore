@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { Link, Navigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
+import { isAppAdmin } from '../lib/admin';
+import { ITEM_DESCRIPTION_MAX, ITEM_NAME_MAX } from '../lib/itemLimits';
 import { ShoppingBag, Package2, Mail, LogOut, LayoutDashboard } from 'lucide-react';
 import { parseISO, isValid } from 'date-fns';
 import type { PromoItem as BasePromoItem } from '../types';
@@ -22,7 +24,7 @@ interface EditingOrderDates {
 
 function AdminDashboard() {
   const { user, loading: authLoading, signOut } = useAuth();
-  const navigate = useNavigate();
+  const isAdmin = isAppAdmin(user);
   const [activeTab, setActiveTab] = useState<'inventory' | 'orders' | 'email-settings'>('orders');
   const [items, setItems] = useState<BasePromoItem[]>([]);
   const [orders, setOrders] = useState<OrderWithDetails[]>([]);
@@ -37,12 +39,7 @@ function AdminDashboard() {
   const [editingOrderDates, setEditingOrderDates] = useState<EditingOrderDates | null>(null);
 
   useEffect(() => {
-    if (authLoading) return;
-
-    if (!user?.is_admin) {
-      navigate('/login');
-      return;
-    }
+    if (authLoading || !isAdmin) return;
 
     if (activeTab === 'inventory') {
       fetchItems();
@@ -51,7 +48,7 @@ function AdminDashboard() {
     } else if (activeTab === 'email-settings') {
       setLoading(false);
     }
-  }, [activeTab, user, authLoading, navigate]);
+  }, [activeTab, isAdmin, authLoading]);
 
   const fetchItems = async () => {
     try {
@@ -147,8 +144,19 @@ function AdminDashboard() {
       setSaving(true);
       setError(null);
 
-      if (!item.name.trim()) {
+      const name = item.name.trim();
+      const description = item.description?.trim() || '';
+
+      if (!name) {
         throw new Error('Name is required');
+      }
+
+      if (name.length > ITEM_NAME_MAX) {
+        throw new Error(`Name must be ${ITEM_NAME_MAX} characters or fewer`);
+      }
+
+      if (description.length > ITEM_DESCRIPTION_MAX) {
+        throw new Error(`Description must be ${ITEM_DESCRIPTION_MAX} characters or fewer`);
       }
 
       if (item.total_quantity < 0) {
@@ -164,8 +172,8 @@ function AdminDashboard() {
       }
 
       const itemData = {
-        name: item.name.trim(),
-        description: item.description?.trim() || null,
+        name,
+        description: description || null,
         image_url: item.image_url?.trim() || null,
         total_quantity: item.total_quantity,
         available_quantity: item.isNew ? item.total_quantity : item.available_quantity,
@@ -475,12 +483,64 @@ function AdminDashboard() {
     }
   };
 
-  if (authLoading || !user?.is_admin) {
+  const handleReviewExtension = async (orderId: string, approve: boolean, note: string) => {
+    const orderToNotify = orders.find((order) => order.id === orderId);
+    setProcessingOrders((prev) => new Set([...prev, orderId]));
+    setError(null);
+
+    try {
+      const { data, error: reviewError } = await supabase.rpc('admin_review_extension', {
+        p_order_id: orderId,
+        p_approve: approve,
+        p_admin_note: note || null,
+      });
+
+      if (reviewError) throw reviewError;
+      if (!data || data.success === false) {
+        throw new Error(data?.message || 'Could not review this extension.');
+      }
+
+      try {
+        await supabase.functions.invoke('send-extension-decision', {
+          body: {
+            decision: approve ? 'approved' : 'denied',
+            orderId: data.order_id || orderId,
+            orderNumber: data.order_number || orderToNotify?.order_number || orderId,
+            customerName: data.user_name || orderToNotify?.user_name || '',
+            customerEmail: data.user_email || orderToNotify?.user_email || '',
+            previousReturnDate: data.previous_return_date || data.current_return_date || orderToNotify?.return_date,
+            newReturnDate: data.new_return_date || null,
+            requestedReturnDate: data.requested_return_date || orderToNotify?.extension_requested_return_date,
+            adminNote: data.admin_note || note || null,
+          },
+        });
+      } catch (emailError) {
+        console.error('Extension decision email failed:', emailError);
+        setError('The decision was saved, but the notification email could not be sent.');
+      }
+
+      await fetchOrders();
+    } catch (err: any) {
+      setError(err.message || 'Could not review this extension.');
+    } finally {
+      setProcessingOrders((prev) => {
+        const next = new Set(prev);
+        next.delete(orderId);
+        return next;
+      });
+    }
+  };
+
+  if (authLoading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-blue-600"></div>
       </div>
     );
+  }
+
+  if (!isAdmin) {
+    return <Navigate to="/login" replace />;
   }
 
   return (
@@ -562,6 +622,7 @@ function AdminDashboard() {
             onFulfillWishlist={handleFulfillWishlistItem}
             processingOrders={processingOrders}
             getAvailableStatuses={getAvailableStatuses}
+            onReviewExtension={handleReviewExtension}
           />
         ) : activeTab === 'inventory' ? (
           <InventoryTable

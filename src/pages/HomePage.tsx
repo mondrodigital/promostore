@@ -10,12 +10,14 @@ import ItemCalendar from '../components/ItemCalendar';
 import SimpleNavbar from '../components/SimpleNavbar';
 import BottomRequestBar from '../components/BottomRequestBar';
 import ItemFilterBar from '../components/ItemFilterBar';
+import QuantityAdder from '../components/QuantityAdder';
+import { isCompanyEmail } from '../lib/companyEmail';
+import { checkoutDateError } from '../lib/dates';
 import {
   validateCartAvailability,
   createOrderAtomic,
   saveWishlistItems,
   sendOrderNotifications,
-  sendPowerAutomateWebhook,
   type OrderFormData
 } from '../services/orderService';
 
@@ -54,9 +56,7 @@ export default function HomePage() {
   const [isBannerVisible, setIsBannerVisible] = useState(true);
   const submittingRef = useRef(false);
 
-  const validateEmail = (email: string) => {
-    return email.toLowerCase().endsWith('@vellummortgage.com');
-  };
+  const validateEmail = (email: string) => isCompanyEmail(email);
 
   const fetchItems = async () => {
     try {
@@ -98,7 +98,11 @@ export default function HomePage() {
 
   const handleSubmit = async () => {
     if (submittingRef.current) return;
+    submittingRef.current = true;
+    setIsSubmitting(true);
+    setError(null);
 
+    try {
     if (!formData.name || !formData.email || !formData.pickupDate || !formData.returnDate || !formData.eventStartDate || !formData.eventEndDate) {
       showError('Please fill in all required fields');
       return;
@@ -109,16 +113,17 @@ export default function HomePage() {
       return;
     }
 
+    const dateError = checkoutDateError(formData);
+    if (dateError) {
+      showError(dateError);
+      return;
+    }
+
     if (cartItems.length === 0 && wishlistItems.length === 0) {
       showError('Please add items to your cart or wishlist before submitting');
       return;
     }
 
-    submittingRef.current = true;
-    setIsSubmitting(true);
-    setError(null);
-
-    try {
       // Validate cart availability before proceeding
       if (cartItems.length > 0) {
         const validation = await validateCartAvailability(cartItems);
@@ -156,25 +161,24 @@ export default function HomePage() {
           }
           
           showInfo('Cart has been adjusted. Please review and submit again.');
-          setIsSubmitting(false);
-          submittingRef.current = false;
           return;
         }
       }
 
       const orderFormData: OrderFormData = formData;
+      const idempotencyKey = crypto.randomUUID();
       let orderId: string | null = null;
       let orderNumber: string | null = null;
       let orderSuccessful = false;
       let wishlistSaved = false;
 
       if (cartItems.length > 0) {
-        const orderResult = await createOrderAtomic(orderFormData, cartItems, 'pending');
+        const orderResult = await createOrderAtomic(orderFormData, cartItems, 'pending', idempotencyKey);
         orderId = orderResult.orderId;
         orderNumber = orderResult.orderNumber;
         orderSuccessful = true;
       } else if (wishlistItems.length > 0) {
-        const orderResult = await createOrderAtomic(orderFormData, [], 'wishlist_only');
+        const orderResult = await createOrderAtomic(orderFormData, [], 'wishlist_only', idempotencyKey);
         orderId = orderResult.orderId;
         orderNumber = orderResult.orderNumber;
       }
@@ -186,10 +190,6 @@ export default function HomePage() {
 
       if ((orderSuccessful || wishlistSaved) && orderId) {
         await sendOrderNotifications(orderId, orderNumber, orderFormData, cartItems, wishlistItems);
-        
-        if (orderSuccessful) {
-          await sendPowerAutomateWebhook(orderId, orderNumber, orderFormData);
-        }
       }
 
       if (guestEmail !== formData.email) {
@@ -385,56 +385,25 @@ export default function HomePage() {
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-3">
-                        <input
-                          type="number"
-                          min="1"
-                          defaultValue="1"
-                          className="w-20 px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                          id={`quantity-${item.id}`}
-                        />
-                        <button
-                          className={`flex-1 px-4 py-2 rounded-lg transition-colors text-white ${ 
-                            isOutOfStock 
-                              ? 'bg-orange-500 hover:bg-orange-600'
-                              : 'bg-[#0075AE] hover:bg-[#005f8c] disabled:opacity-50 disabled:cursor-not-allowed'
-                           }`}
-                          disabled={!isOutOfStock && cartQuantity >= item.available_quantity}
-                          onClick={() => {
-                            const input = document.getElementById(`quantity-${item.id}`) as HTMLInputElement;
-                            const quantity = parseInt(input.value) || 1;
-                            
-                            if (quantity <= 0) {
-                              showError('Please enter a valid quantity');
-                              return;
-                            }
-                            
-                            if (isOutOfStock) {
-                              addToWishlist(item, quantity);
-                              showInfo(`${item.name} added to wishlist`);
-                            } else {
-                              const currentInCart = getItemQuantity(String(item.id));
-                              const totalRequested = currentInCart + quantity;
-                              
-                              if (totalRequested <= item.available_quantity) {
-                                addToCart(item, quantity);
-                                showSuccess(`${item.name} added to cart`);
-                              } else {
-                                const maxAddable = item.available_quantity - currentInCart;
-                                if (maxAddable > 0) {
-                                  showWarning(`Only ${maxAddable} more available. Adjusted quantity.`);
-                                  addToCart(item, maxAddable);
-                                } else {
-                                  showWarning(`Maximum quantity already in cart`);
-                                }
-                              }
-                            }
-                            input.value = "1";
-                          }}
-                        >
-                          {isOutOfStock ? 'Add to Wishlist' : (cartQuantity >= item.available_quantity ? 'Max in Cart' : 'Add to Cart')}
-                        </button>
-                      </div>
+                      <QuantityAdder
+                        max={isOutOfStock ? Math.max(item.total_quantity, 1) : item.available_quantity - cartQuantity}
+                        label={isOutOfStock ? 'Add to Wishlist' : (cartQuantity >= item.available_quantity ? 'Max in Cart' : 'Add to Cart')}
+                        disabled={!isOutOfStock && cartQuantity >= item.available_quantity}
+                        buttonClassName={`flex-1 px-4 py-2 rounded-lg transition-colors text-white disabled:opacity-50 disabled:cursor-not-allowed ${
+                          isOutOfStock
+                            ? 'bg-orange-500 hover:bg-orange-600'
+                            : 'bg-[#0075AE] hover:bg-[#005f8c]'
+                        }`}
+                        onAdd={(quantity) => {
+                          if (isOutOfStock) {
+                            addToWishlist(item, quantity);
+                            showInfo(`${item.name} added to wishlist`);
+                            return;
+                          }
+                          addToCart(item, quantity);
+                          showSuccess(`${item.name} added to cart`);
+                        }}
+                      />
                     </div>
                   </div>
                 );

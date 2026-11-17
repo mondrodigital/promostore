@@ -1,6 +1,7 @@
 import React from 'react';
 import { X, Package2, Upload } from 'lucide-react';
 import type { PromoItem } from '../../types';
+import { ITEM_DESCRIPTION_MAX, ITEM_NAME_MAX } from '../../lib/itemLimits';
 
 type Category = 'Tents' | 'Tables' | 'Linens' | 'Displays' | 'Decor' | 'Games' | 'Misc';
 
@@ -70,10 +71,12 @@ export default function EditItemModal({
             <input
               type="text"
               value={editingItem.name}
-              onChange={(e) => setEditingItem({ ...editingItem, name: e.target.value })}
+              maxLength={ITEM_NAME_MAX}
+              onChange={(e) => setEditingItem({ ...editingItem, name: e.target.value.slice(0, ITEM_NAME_MAX) })}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0075AE] focus:border-transparent outline-none"
               placeholder="Enter item name"
             />
+            <p className="mt-1 text-xs text-gray-500">{editingItem.name.length}/{ITEM_NAME_MAX}</p>
           </div>
 
           {/* Description */}
@@ -83,11 +86,13 @@ export default function EditItemModal({
             </label>
             <textarea
               value={editingItem.description || ''}
-              onChange={(e) => setEditingItem({ ...editingItem, description: e.target.value })}
+              maxLength={ITEM_DESCRIPTION_MAX}
+              onChange={(e) => setEditingItem({ ...editingItem, description: e.target.value.slice(0, ITEM_DESCRIPTION_MAX) })}
               rows={3}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0075AE] focus:border-transparent outline-none resize-none"
               placeholder="Describe this item..."
             />
+            <p className="mt-1 text-xs text-gray-500">{(editingItem.description || '').length}/{ITEM_DESCRIPTION_MAX}</p>
           </div>
 
           {/* Category */}
