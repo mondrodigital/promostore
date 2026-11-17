@@ -102,8 +102,6 @@ export default function EmailSettings() {
         .eq('template_id', templateId);
 
       if (updateError) throw updateError;
-      console.log(`Settings saved for ${templateId}`);
-      // Optionally show a success message
       alert(`Settings saved for ${templateId}`); // Simple success alert
     } catch (err: any) {
       console.error(`Error saving settings for ${templateId}:`, err);

@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import type { Order } from '../../types';
 import StatusDropdown from '../StatusDropdown';
+import { parseDateOnly } from '../../lib/dates';
 
 // Types for the order data from edge function
 interface CheckoutItem {
@@ -58,6 +59,9 @@ export interface OrderWithDetails {
   status: 'pending' | 'picked_up' | 'returned' | 'cancelled' | 'wishlist_only';
   items: CheckoutItem[];
   associatedWishlistItems: WishlistItem[];
+  extension_status?: string | null;
+  extension_requested_return_date?: string | null;
+  extension_admin_note?: string | null;
 }
 
 interface OrderCardProps {
@@ -233,6 +237,26 @@ export default function OrderCard({
                 <span>Created {format(new Date(order.created_at), 'MMM d, yyyy')}</span>
               </div>
             </div>
+
+            {order.extension_status === 'pending' && (
+              <p className="mb-4 text-sm text-amber-800">
+                Extension pending
+                {order.extension_requested_return_date
+                  ? ` — requested return ${format(parseDateOnly(order.extension_requested_return_date) || parseISO(order.extension_requested_return_date), 'MMM d, yyyy')}`
+                  : ''}
+                . Approve or deny it in Pending extensions above.
+              </p>
+            )}
+
+            {order.extension_status && order.extension_status !== 'pending' && (
+              <p className="mb-4 text-sm text-gray-700">
+                Extension {order.extension_status}
+                {order.extension_requested_return_date
+                  ? ` for ${format(parseDateOnly(order.extension_requested_return_date) || parseISO(order.extension_requested_return_date), 'MMM d, yyyy')}`
+                  : ''}
+                {order.extension_admin_note ? `. Note: ${order.extension_admin_note}` : ''}
+              </p>
+            )}
 
             {/* Items Preview */}
             <div className="flex items-center justify-between">

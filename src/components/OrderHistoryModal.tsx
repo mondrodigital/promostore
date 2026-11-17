@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, Package, Calendar, Clock, ChevronDown, ChevronUp, RefreshCw, LogOut } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { format } from 'date-fns';
+import { isCompanyEmail } from '../lib/companyEmail';
+import { addDays, formatDateInput, parseDateOnly } from '../lib/dates';
 
 interface OrderHistoryItem {
   id: string;
@@ -14,6 +16,9 @@ interface OrderHistoryItem {
   event_end_date?: string | null;
   status: 'pending' | 'picked_up' | 'returned' | 'cancelled' | 'wishlist_only';
   order_number?: string;
+  extension_status?: string | null;
+  extension_requested_return_date?: string | null;
+  extension_admin_note?: string | null;
   items: Array<{
     id: string;
     quantity: number;
@@ -47,6 +52,11 @@ export default function OrderHistoryModal({ isOpen, onClose, userEmail, onReorde
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
+  const [actingOrderId, setActingOrderId] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [extensionOrderId, setExtensionOrderId] = useState<string | null>(null);
+  const [extensionDate, setExtensionDate] = useState('');
+  const actionLock = useRef(false);
 
   const handleReorder = (order: OrderHistoryItem) => {
     // Convert order items to cart format
@@ -75,7 +85,12 @@ export default function OrderHistoryModal({ isOpen, onClose, userEmail, onReorde
     setError(null);
     
     try {
-      // Get the Supabase URL and construct the edge function URL with query parameter
+      if (!isCompanyEmail(userEmail)) {
+        setOrders([]);
+        setError('Use your @vellummortgage.com email address.');
+        return;
+      }
+
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
       
@@ -95,9 +110,10 @@ export default function OrderHistoryModal({ isOpen, onClose, userEmail, onReorde
       }
 
       const data = await response.json();
-
-      // Data is already filtered server-side, just sort by date
-      const userOrders = data || [];
+      const userOrders = Array.isArray(data) ? data : Array.isArray(data?.orders) ? data.orders : null;
+      if (!userOrders) {
+        throw new Error(data?.error || 'Failed to fetch orders');
+      }
       userOrders.sort((a: OrderHistoryItem, b: OrderHistoryItem) => 
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
       );
@@ -105,7 +121,10 @@ export default function OrderHistoryModal({ isOpen, onClose, userEmail, onReorde
       setOrders(userOrders);
     } catch (err: any) {
       console.error('Error fetching order history:', err);
-      setError('Unable to load order history. Please try again.');
+      const message = err?.message === 'Failed to fetch'
+        ? 'Unable to load order history. Please try again.'
+        : (err.message || 'Unable to load order history. Please try again.');
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -142,6 +161,98 @@ export default function OrderHistoryModal({ isOpen, onClose, userEmail, onReorde
         return 'Wishlist Only';
       default:
         return status;
+    }
+  };
+
+  const extensionBounds = (order: OrderHistoryItem) => {
+    if (!order.return_date || !order.checkout_date) return null;
+    const currentReturn = parseDateOnly(order.return_date);
+    const pickup = parseDateOnly(order.checkout_date);
+    if (!currentReturn || !pickup) return null;
+    const min = formatDateInput(addDays(currentReturn, 1));
+    const max = formatDateInput(addDays(pickup, 14));
+    if (min > max) return null;
+    return { min, max };
+  };
+
+  const cancelOrder = async (order: OrderHistoryItem) => {
+    if (actionLock.current) return;
+    const label = order.order_number || 'this order';
+    if (!window.confirm(`Cancel ${label}? Pending items will be released.`)) return;
+
+    actionLock.current = true;
+    setActingOrderId(order.id);
+    setError(null);
+    setActionMessage(null);
+    try {
+      const { data, error: rpcError } = await supabase.rpc('lo_cancel_order', {
+        p_order_id: order.id,
+        p_user_email: userEmail,
+      });
+      if (rpcError) throw rpcError;
+      if (data && data.success === false) {
+        throw new Error(data.message || 'Could not cancel this order.');
+      }
+      setActionMessage('Order cancelled.');
+      await fetchOrderHistory();
+    } catch (err: any) {
+      console.error('Cancel order failed:', err);
+      setError(err.message || 'Could not cancel this order.');
+    } finally {
+      actionLock.current = false;
+      setActingOrderId(null);
+    }
+  };
+
+  const requestExtension = async (order: OrderHistoryItem) => {
+    if (actionLock.current) return;
+    const bounds = extensionBounds(order);
+    if (!bounds || extensionDate < bounds.min || extensionDate > bounds.max) {
+      setError('Choose a return date after the current return date and within 14 days of pickup.');
+      return;
+    }
+
+    actionLock.current = true;
+    setActingOrderId(order.id);
+    setError(null);
+    setActionMessage(null);
+    try {
+      const { data, error: rpcError } = await supabase.rpc('lo_request_extension', {
+        p_order_id: order.id,
+        p_user_email: userEmail,
+        p_requested_return_date: extensionDate,
+      });
+      if (rpcError) throw rpcError;
+      if (!data || data.success === false) {
+        throw new Error(data?.message || 'Could not request an extension.');
+      }
+
+      const { error: emailError } = await supabase.functions.invoke('send-extension-request', {
+        body: {
+          orderId: order.id,
+          orderNumber: order.order_number,
+          customerName: order.user_name,
+          customerEmail: userEmail,
+          currentReturnDate: order.return_date,
+          requestedReturnDate: extensionDate,
+        },
+      });
+
+      if (emailError) {
+        console.error('Extension notification email failed:', emailError);
+        setActionMessage('Extension requested. The notification email could not be sent.');
+      } else {
+        setActionMessage('Extension requested. Marketing has been emailed.');
+      }
+      setExtensionOrderId(null);
+      setExtensionDate('');
+      await fetchOrderHistory();
+    } catch (err: any) {
+      console.error('Extension request failed:', err);
+      setError(err.message || 'Could not request an extension.');
+    } finally {
+      actionLock.current = false;
+      setActingOrderId(null);
     }
   };
 
@@ -193,6 +304,12 @@ export default function OrderHistoryModal({ isOpen, onClose, userEmail, onReorde
           {error && (
             <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-center gap-2">
               <div className="text-red-600 text-sm">{error}</div>
+            </div>
+          )}
+
+          {actionMessage && (
+            <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-sm text-green-800">
+              {actionMessage}
             </div>
           )}
 
@@ -250,8 +367,34 @@ export default function OrderHistoryModal({ isOpen, onClose, userEmail, onReorde
                         </div>
                       </button>
                       <div className="flex items-center gap-2 ml-4">
+                        {order.status === 'pending' && (
+                          <button
+                            type="button"
+                            onClick={() => cancelOrder(order)}
+                            disabled={actingOrderId === order.id}
+                            className="px-3 py-2 text-sm font-medium text-red-700 bg-red-50 rounded-lg hover:bg-red-100 disabled:opacity-50"
+                          >
+                            {actingOrderId === order.id ? 'Cancelling...' : 'Cancel'}
+                          </button>
+                        )}
+                        {order.status === 'picked_up' && order.extension_status !== 'pending' && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setExpandedOrderId(order.id);
+                              setExtensionOrderId(order.id);
+                              const bounds = extensionBounds(order);
+                              setExtensionDate(bounds?.min || '');
+                              setError(null);
+                            }}
+                            className="px-3 py-2 text-sm font-medium text-[#0075AE] bg-blue-50 rounded-lg hover:bg-blue-100"
+                          >
+                            Request extension
+                          </button>
+                        )}
                         {order.items.length > 0 && (
                           <button
+                            type="button"
                             onClick={() => handleReorder(order)}
                             className="flex items-center gap-2 px-3 py-2 bg-[#0075AE] text-white rounded-lg hover:bg-[#005f8c] transition-colors text-sm font-medium"
                             title="Add these items to your cart"
@@ -277,6 +420,56 @@ export default function OrderHistoryModal({ isOpen, onClose, userEmail, onReorde
                   {/* Order Details (Expanded) */}
                   {expandedOrderId === order.id && (
                     <div className="p-4 bg-white border-t border-gray-200">
+                      {order.extension_status && (
+                        <div className="mb-4 p-3 bg-amber-50 rounded-lg text-sm text-amber-900">
+                          <p>
+                            Extension {order.extension_status}
+                            {order.extension_requested_return_date
+                              ? ` for ${format(parseDateOnly(order.extension_requested_return_date) || new Date(order.extension_requested_return_date), 'MMM d, yyyy')}`
+                              : ''}
+                            .
+                          </p>
+                          {order.extension_admin_note && (
+                            <p className="mt-1">Note: {order.extension_admin_note}</p>
+                          )}
+                        </div>
+                      )}
+
+                      {extensionOrderId === order.id && order.status === 'picked_up' && order.extension_status !== 'pending' && (
+                        <div className="mb-4 p-3 border border-gray-200 rounded-lg">
+                          <p className="text-sm font-medium text-gray-900">Request a later return date</p>
+                          {extensionBounds(order) ? (
+                            <>
+                              <p className="mt-1 text-xs text-gray-500">
+                                After the current return date, and no more than 14 days after pickup.
+                              </p>
+                              <div className="mt-3 flex flex-col sm:flex-row gap-2">
+                                <input
+                                  type="date"
+                                  min={extensionBounds(order)?.min}
+                                  max={extensionBounds(order)?.max}
+                                  value={extensionDate}
+                                  onChange={(event) => setExtensionDate(event.target.value)}
+                                  className="px-3 py-2 border border-gray-300 rounded-lg"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => requestExtension(order)}
+                                  disabled={actingOrderId === order.id || !extensionDate}
+                                  className="px-4 py-2 bg-[#0075AE] text-white rounded-lg text-sm font-medium disabled:opacity-50"
+                                >
+                                  {actingOrderId === order.id ? 'Sending...' : 'Submit extension'}
+                                </button>
+                              </div>
+                            </>
+                          ) : (
+                            <p className="mt-1 text-sm text-gray-600">
+                              This order cannot be extended further. Return is already at the 14-day limit, or the dates are missing.
+                            </p>
+                          )}
+                        </div>
+                      )}
+
                       {/* Event Dates */}
                       {order.event_start_date && order.event_end_date && (
                         <div className="mb-4 p-3 bg-blue-50 rounded-lg">

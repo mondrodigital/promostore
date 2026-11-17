@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { LogIn, LayoutDashboard, LogOut } from 'lucide-react';
 import vellumLogo from '../VellumLogo_Horizontal_Artboard 1.svg';
 import { useAuth } from '../context/AuthContext';
+import { isAppAdmin } from '../lib/admin';
 
 export default function SimpleNavbar() {
   const { user, signOut } = useAuth();
@@ -33,6 +34,7 @@ export default function SimpleNavbar() {
           <div className="flex items-center space-x-2">
             {user ? (
               <>
+                {isAppAdmin(user) && (
                 <Link
                   to="/admin"
                   title="Admin Dashboard"
@@ -40,6 +42,7 @@ export default function SimpleNavbar() {
                 >
                   <LayoutDashboard className="h-5 w-5" aria-hidden="true" />
                 </Link>
+                )}
                 <button
                   onClick={signOut}
                   title="Logout"

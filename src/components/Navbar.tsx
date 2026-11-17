@@ -2,6 +2,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { LogIn, LayoutDashboard, Search, LogOut } from 'lucide-react';
 import vellumLogo from '../VellumLogo_Horizontal_Artboard 1.svg';
 import { useAuth } from '../context/AuthContext';
+import { isAppAdmin } from '../lib/admin';
 import TopBookingBar from './TopBookingBar';
 import type { CartItem } from '../types';
 
@@ -105,8 +106,8 @@ export default function Navbar({
           {/* Right Section: Direct Links/Buttons */}
           <div className="flex items-center flex-shrink-0 space-x-2">
             {user ? (
-              // Logged In: Admin Link + Logout Button
               <>
+                {isAppAdmin(user) && (
                 <Link 
                   to="/admin" 
                   title="Admin Dashboard"
@@ -114,6 +115,7 @@ export default function Navbar({
                 >
                   <LayoutDashboard className="h-5 w-5" aria-hidden="true" />
                 </Link>
+                )}
                 <button 
                   onClick={signOut} 
                   title="Logout"

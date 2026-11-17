@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase';
 import { Package2, ShoppingCart } from 'lucide-react';
 import { useCart } from '../context/CartContext';
 import CartModal from '../components/CartModal';
+import QuantityAdder from '../components/QuantityAdder';
 import type { PromoItem } from '../types';
 
 function Inventory() {
@@ -128,30 +129,13 @@ function Inventory() {
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="number"
-                      min="1"
-                      max={remainingQuantity}
-                      defaultValue="1"
-                      className="w-20 px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                      id={`quantity-${item.id}`}
-                    />
-                    <button
-                      className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      disabled={remainingQuantity === 0}
-                      onClick={() => {
-                        const input = document.getElementById(`quantity-${item.id}`) as HTMLInputElement;
-                        const quantity = parseInt(input.value);
-                        if (quantity > 0 && quantity <= remainingQuantity) {
-                          addToCart(item, quantity);
-                          input.value = "1";
-                        }
-                      }}
-                    >
-                      Add to Cart
-                    </button>
-                  </div>
+                  <QuantityAdder
+                    max={remainingQuantity}
+                    label={remainingQuantity === 0 ? 'Max in Cart' : 'Add to Cart'}
+                    disabled={remainingQuantity === 0}
+                    buttonClassName="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    onAdd={(quantity) => addToCart(item, quantity)}
+                  />
                 </div>
               </div>
             );

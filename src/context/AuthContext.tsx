@@ -1,12 +1,10 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
+import { isAppAdmin } from '../lib/admin';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
 
-// Define our app-specific User type (if different from SupabaseUser or needs additions)
-// For now, let's assume we want the Supabase user object directly, 
-// potentially adding our custom fields like is_admin later if needed.
 interface AppUser extends SupabaseUser {
-  is_admin?: boolean; // Add custom fields if they exist in your user metadata or profiles table
+  is_admin?: boolean;
 }
 
 interface AuthContextType {
@@ -26,9 +24,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
       if (session?.user) {
-        const isAdmin = session.user.user_metadata?.is_admin === true;
-        setUser({ ...session.user, is_admin: isAdmin });
-      } else if (event === 'SIGNED_OUT') {
+        setUser({ ...session.user, is_admin: isAppAdmin(session.user) });
+      } else if (event === 'SIGNED_OUT' || event === 'INITIAL_SESSION') {
         setUser(null);
       }
       setLoading(false);

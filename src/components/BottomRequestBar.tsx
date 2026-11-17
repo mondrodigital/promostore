@@ -5,6 +5,8 @@ import { X, ShoppingCart, ChevronUp, ChevronDown, AlertCircle, History } from 'l
 import type { CartItem } from '../types';
 import OrderHistoryModal from './OrderHistoryModal';
 import { useGuestUser } from '../context/GuestUserContext';
+import { isCompanyEmail } from '../lib/companyEmail';
+import { checkoutDateError, startOfToday } from '../lib/dates';
 
 interface BottomRequestBarProps {
   formData: {
@@ -49,7 +51,9 @@ export default function BottomRequestBar({
   const [modalType, setModalType] = useState<'event' | 'pickup' | 'cart' | 'email_prompt' | null>(null);
   const [showOrderHistory, setShowOrderHistory] = useState(false);
   const [emailPromptInput, setEmailPromptInput] = useState('');
+  const [emailPromptError, setEmailPromptError] = useState('');
   const { guestEmail, setGuestEmail, clearGuestEmail } = useGuestUser();
+  const dateError = checkoutDateError(formData);
 
   const totalCartQuantity = getTotalQuantity();
   const totalItems = totalCartQuantity + wishlistItems.length;
@@ -108,26 +112,25 @@ export default function BottomRequestBar({
 
   // Handle history button click
   const handleHistoryClick = () => {
-    if (guestEmail) {
-      // User email is cached, show order history directly
+    if (guestEmail && isCompanyEmail(guestEmail)) {
       setShowOrderHistory(true);
-    } else {
-      // Prompt for email
-      setModalType('email_prompt');
-      setEmailPromptInput('');
+      return;
     }
+    setModalType('email_prompt');
+    setEmailPromptInput('');
+    setEmailPromptError('');
   };
 
-  // Handle email prompt submission
   const handleEmailPromptSubmit = () => {
-    if (emailPromptInput.trim()) {
-      // Save to guest email context
-      setGuestEmail(emailPromptInput.trim());
-      
-      // Close prompt and show order history
-      setModalType(null);
-      setShowOrderHistory(true);
+    const email = emailPromptInput.trim();
+    if (!email) return;
+    if (!isCompanyEmail(email)) {
+      setEmailPromptError('Use your @vellummortgage.com email address.');
+      return;
     }
+    setGuestEmail(email);
+    setModalType(null);
+    setShowOrderHistory(true);
   };
 
   // Handle sign out
@@ -194,8 +197,9 @@ export default function BottomRequestBar({
                   <ChevronUp className="h-4 w-4" />
                 </button>
                 <button
+                  type="button"
                   onClick={handleRequestClick}
-                  disabled={isSubmitting || totalItems === 0}
+                  disabled={isSubmitting || totalItems === 0 || Boolean(dateError)}
                   className="bg-[#0075AE] text-white px-6 py-2.5 rounded-lg font-medium hover:bg-[#005f8c] disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
                 >
                   <span className="text-sm sm:text-base">
@@ -319,6 +323,12 @@ export default function BottomRequestBar({
                 </div>
               </div>
 
+              {dateError && (formData.pickupDate || formData.returnDate || formData.eventStartDate || formData.eventEndDate) && (
+                <div className="mb-4 bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+                  {dateError}
+                </div>
+              )}
+
               {/* Cart Summary */}
               <div className="mb-4 p-3 bg-gray-50 rounded-lg">
                 <button
@@ -340,8 +350,9 @@ export default function BottomRequestBar({
 
               {/* Submit Button */}
               <button
+                type="button"
                 onClick={handleRequestClick}
-                disabled={isSubmitting || totalItems === 0}
+                disabled={isSubmitting || totalItems === 0 || Boolean(dateError)}
                 className="w-full bg-[#0075AE] text-white px-6 py-3 rounded-lg font-medium hover:bg-[#005f8c] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 {isSubmitting ? 'Submitting Request...' : 'Submit Request'}
@@ -387,8 +398,11 @@ export default function BottomRequestBar({
                     selectsRange={true}
                     inline
                     monthsShown={2}
-                    minDate={new Date()}
+                    minDate={startOfToday()}
                   />
+                  <p className="mt-3 text-center text-xs text-gray-500">
+                    Past dates are unavailable. Return must be on or after pickup, within 14 days.
+                  </p>
                 </div>
               </>
             )}
@@ -493,7 +507,7 @@ export default function BottomRequestBar({
               <>
                 <h3 className="text-lg font-semibold mb-4 text-center">View Your Order History</h3>
                 <p className="text-sm text-gray-600 mb-4 text-center">
-                  Enter your email to view your past orders. We'll remember you for next time!
+                  Enter your @vellummortgage.com email. No account or password is required.
                 </p>
                 <div className="space-y-4">
                   <div>
@@ -513,8 +527,12 @@ export default function BottomRequestBar({
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0075AE] focus:border-transparent outline-none"
                       autoFocus
                     />
+                    {emailPromptError && (
+                      <p className="mt-2 text-sm text-red-600">{emailPromptError}</p>
+                    )}
                   </div>
                   <button
+                    type="button"
                     onClick={handleEmailPromptSubmit}
                     disabled={!emailPromptInput.trim()}
                     className="w-full bg-[#0075AE] text-white px-6 py-3 rounded-lg font-medium hover:bg-[#005f8c] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
@@ -522,7 +540,7 @@ export default function BottomRequestBar({
                     View Order History
                   </button>
                   <p className="text-xs text-gray-500 text-center">
-                    Your email will be saved locally for convenience
+                    Your email is saved in this browser so you can look up orders again.
                   </p>
                 </div>
               </>

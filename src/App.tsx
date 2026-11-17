@@ -5,9 +5,12 @@ import { CartProvider } from './context/CartContext';
 import { GuestUserProvider } from './context/GuestUserContext';
 import { ToastProvider } from './context/ToastContext';
 import ErrorBoundary from './components/ErrorBoundary';
+import RecoveryRedirect from './components/RecoveryRedirect';
 import AdminDashboard from './pages/AdminDashboard';
 import HomePage from './pages/HomePage';
 import Login from './pages/Login';
+import NotFound from './pages/NotFound';
+import ResetPassword from './pages/ResetPassword';
 
 function App() {
   return (
@@ -17,10 +20,13 @@ function App() {
           <GuestUserProvider>
             <CartProvider>
               <ToastProvider>
+                <RecoveryRedirect />
                 <Routes>
                   <Route path="/" element={<HomePage />} />
                   <Route path="/admin" element={<AdminDashboard />} />
                   <Route path="/login" element={<Login />} />
+                  <Route path="/reset-password" element={<ResetPassword />} />
+                  <Route path="*" element={<NotFound />} />
                 </Routes>
               </ToastProvider>
             </CartProvider>

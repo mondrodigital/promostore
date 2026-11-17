@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { X, ShoppingCart, Trash2 } from 'lucide-react';
 import { useCart } from '../context/CartContext';
 import { supabase } from '../lib/supabase';
+import { isCompanyEmail } from '../lib/companyEmail';
+import { checkoutDateError, parseDateOnly, startOfToday, formatDateInput } from '../lib/dates';
 
 interface CheckoutForm {
   name: string;
@@ -28,13 +30,34 @@ export default function CartModal({
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const submittingRef = useRef(false);
+  const today = formatDateInput(startOfToday());
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setIsSubmitting(true);
     setError(null);
 
     try {
+      if (!isCompanyEmail(checkoutForm.email)) {
+        setError('Please use your @vellummortgage.com email address');
+        return;
+      }
+
+      const pickupDate = parseDateOnly(checkoutForm.pickupDate);
+      const returnDate = parseDateOnly(checkoutForm.returnDate);
+      const dateError = checkoutDateError({
+        pickupDate,
+        returnDate,
+        eventStartDate: null,
+        eventEndDate: null,
+      });
+      if (dateError) {
+        setError(dateError);
+        return;
+      }
       // Prepare items array
       const orderItems = items.map(item => ({
         item_id: item.id,
@@ -54,6 +77,9 @@ export default function CartModal({
       );
 
       if (submitError) throw submitError;
+      if (data && data.success === false) {
+        throw new Error(data.message || 'Failed to submit order');
+      }
 
       clearCart();
       onClose();
@@ -64,6 +90,7 @@ export default function CartModal({
       console.error('Error submitting order:', err);
       setError(err.message || 'Failed to submit order');
     } finally {
+      submittingRef.current = false;
       setIsSubmitting(false);
     }
   };
@@ -113,10 +140,19 @@ export default function CartModal({
                     <div className="flex items-center space-x-4">
                       <input
                         type="number"
-                        min="1"
-                        max={item.available_quantity}
+                        min={1}
+                        max={Math.max(item.available_quantity, 1)}
+                        step={1}
                         value={item.requestedQuantity}
-                        onChange={(e) => updateQuantity(item.id, parseInt(e.target.value))}
+                        onChange={(e) => {
+                          const digits = e.target.value.replace(/\D/g, '');
+                          if (!digits || item.available_quantity < 1) return;
+                          const next = Math.min(
+                            Math.max(parseInt(digits, 10), 1),
+                            item.available_quantity
+                          );
+                          updateQuantity(item.id, next);
+                        }}
                         className="w-20 px-2 py-1 border rounded"
                       />
                       <button
@@ -167,7 +203,7 @@ export default function CartModal({
                     <input
                       type="date"
                       required
-                      min={new Date().toISOString().split('T')[0]}
+                      min={today}
                       value={checkoutForm.pickupDate}
                       onChange={(e) => setCheckoutForm({ ...checkoutForm, pickupDate: e.target.value })}
                       className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
@@ -179,7 +215,7 @@ export default function CartModal({
                     <input
                       type="date"
                       required
-                      min={checkoutForm.pickupDate || new Date().toISOString().split('T')[0]}
+                      min={checkoutForm.pickupDate || today}
                       value={checkoutForm.returnDate}
                       onChange={(e) => setCheckoutForm({ ...checkoutForm, returnDate: e.target.value })}
                       className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
